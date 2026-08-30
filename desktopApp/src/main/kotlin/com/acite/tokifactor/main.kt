@@ -1,5 +1,6 @@
 package com.acite.tokifactor
 
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -14,6 +15,7 @@ fun main() {
         Window(
             onCloseRequest = ::exitApplication,
             title = "tokifactor",
+            icon = painterResource("icon.png"),
             state = rememberWindowState(size = DpSize(450.dp, 800.dp))
         ) {
             App(appGraph.metroViewModelFactory)
