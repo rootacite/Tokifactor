@@ -177,4 +177,4 @@ Stack: Kotlin 2.4, Compose Multiplatform 1.11, Material 3, Metro DI, HiveMQ MQTT
 
 ## License
 
-Not specified in this repository. Ask the author before redistributing.
+GPL v2
