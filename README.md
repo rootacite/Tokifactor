@@ -53,7 +53,7 @@ Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: H
 ### Transport
 
 - MQTT **v5**, QoS 1, `noLocal(true)` so the broker does not echo our own publishes.
-- Wire payload: **UTF-8 Base64 of ciphertext**.
+- Wire payload: **UTF-8 Base64 of `nonce || ciphertext`** (12-byte random nonce, then AES-GCM-SIV output).
 - Default broker: `broker.hivemq.com:8883` (TLS). You can switch in Settings; probes are cached so the list stays usable offline.
 - Text, pictures, files, and avatars use **separate topics** so an older client does not try to render a file as an image.
 
@@ -65,7 +65,9 @@ Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: H
 - a hardcoded salt,
 - info `"P2P_CHANNEL_V1"`.
 
-Payloads are encrypted with **AES-GCM-SIV** (128-bit tag). Wrong magic strings fail authentication and are dropped silently.
+Each payload is encrypted with **AES-GCM-SIV** (128-bit tag) under a **fresh 12-byte random nonce**. The nonce is prepended to the ciphertext and sent with the MQTT message so the receiver can decrypt; it is not secret. Wrong magic strings fail authentication and are dropped silently.
+
+This wire format is **not compatible** with older builds that used a fixed all-zero nonce. Both peers need a current app.
 
 This is a **shared-passphrase** scheme, not modern E2E. See [Limitations](#limitations).
 
@@ -139,7 +141,7 @@ There is nothing to deploy on a server. “Deployment” is: install the APK or 
 
 Peers who use a different magic string will not decrypt your traffic (and you will not see theirs). Peers who use a different broker are on a different bus.
 
-Both sides should run a **compatible app build**. The current picture/file protocol encrypts **per chunk**; an older build that expected one ciphertext for the whole file will not interoperate.
+Both sides should run a **compatible app build**. Current picture/file transfer encrypts **per chunk**, and ciphertext is `nonce || body`. Older builds that used a whole-file ciphertext or a fixed nonce will not interoperate.
 
 ## Limitations
 
@@ -149,7 +151,7 @@ Treat this as a hobby / LAN-replacement-over-MQTT client.
 
 - The magic string is a **group password**. Anyone who knows it and subscribes to the same topics can read and write. There is no per-user key, no forward secrecy, and no authentication of devices.
 - The default magic string `TOKIFACTOR` is public. Leave it unchanged and you share a channel with every other default install on that broker.
-- AES-GCM-SIV is used with a **fixed 12-byte zero nonce**. GCM-SIV is nonce-misuse resistant, but identical plaintexts under the same key still produce identical ciphertexts (traffic analysis / equality leaks).
+- AES-GCM-SIV uses a **random 12-byte nonce per encrypt**, carried in the clear at the front of the packet. Nonce reuse is extremely unlikely with `SecureRandom`, but the scheme still has no forward secrecy.
 - The broker is **untrusted**. It can log topics, sizes, timestamps, client IPs, and ciphertext. TLS (when you pick a TLS broker) only protects the hop to the broker, not the broker itself.
 - Topics (`tokifactor/text`, …) are **global names** on that public broker, not a private namespace. Changing them is a product decision; they are not a secret.
 - Decrypt failures are swallowed so garbage on the topic cannot crash the collector — you simply never see those packets.
