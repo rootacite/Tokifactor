@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
+import com.acite.tokifactor.services.ChatEngine
 import com.acite.tokifactor.services.MqttService
 import com.acite.tokifactor.services.SettingsStore
 import dev.zacsweers.metro.AppScope
@@ -30,6 +31,7 @@ import kotlinx.coroutines.withContext
 class SettingPageViewModel(
     private val settingsStore: SettingsStore,
     private val mqttService: MqttService,
+    private val chatEngine: ChatEngine,
 ) : ViewModel() {
 
     var magicString by mutableStateOf(settingsStore.magicString)
@@ -121,6 +123,10 @@ class SettingPageViewModel(
         settingsStore.updateMqttBroker(selectedBrokerId)
         settingsStore.updateAvatar(avatarBytes)
         reload()
+    }
+
+    fun clearChatHistory() {
+        chatEngine.clearHistory()
     }
 
     companion object {

@@ -23,8 +23,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,6 +71,9 @@ fun SettingPage(
     DisposableEffect(Unit) {
         onDispose { viewModel.save() }
     }
+
+    var clearStep by remember { mutableStateOf(0) }
+    var historyCleared by remember { mutableStateOf(false) }
 
     val avatarPickerLauncher = rememberFilePickerLauncher(
         type = PickerType.Image
@@ -192,7 +197,73 @@ fun SettingPage(
                 onSelect = { viewModel.selectedBrokerId = it },
                 onTestAll = { viewModel.testAllBrokers() },
             )
+            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Chat history", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Messages, photos, and files on this device. Clearing does not tell other peers.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = { clearStep = 1 }) {
+                    Text(
+                        text = "Clear chat history",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (historyCleared) {
+                    Text(
+                        text = "Chat history cleared.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
+    }
+
+    if (clearStep == 1) {
+        AlertDialog(
+            onDismissRequest = { clearStep = 0 },
+            title = { Text("Clear chat history?") },
+            text = {
+                Text("This deletes every message, photo, and file stored on this device.")
+            },
+            confirmButton = {
+                TextButton(onClick = { clearStep = 2 }) {
+                    Text("Continue", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearStep = 0 }) {
+                    Text("Cancel")
+                }
+            },
+        )
+    } else if (clearStep == 2) {
+        AlertDialog(
+            onDismissRequest = { clearStep = 0 },
+            title = { Text("This cannot be undone") },
+            text = {
+                Text("Clear all chat history now?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearChatHistory()
+                        historyCleared = true
+                        clearStep = 0
+                    },
+                ) {
+                    Text("Clear", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearStep = 0 }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 
