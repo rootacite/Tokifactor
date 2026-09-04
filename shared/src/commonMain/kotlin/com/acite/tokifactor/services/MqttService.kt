@@ -13,6 +13,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
@@ -31,23 +34,28 @@ class MqttService @Inject constructor(
     // Store the maximum packet size negotiated with the broker
     private var maxPacketSize: Int? = null
 
+    private val _connected = MutableStateFlow(false)
+    val connected: StateFlow<Boolean> = _connected.asStateFlow()
+
     suspend fun connect(broker: MqttBroker = settingsStore.mqttBroker): Boolean {
         return lock.withLock {
             disconnectUnlocked()
             var built: Mqtt5AsyncClient? = null
             try {
                 val clientId = "compose-metro-${UUID.randomUUID().toString().take(8)}"
-                built = buildClient(broker, clientId)
+                built = buildClient(broker, clientId, autoReconnect = true)
                 val connack = built.connect().await()
                 if (connack?.reasonCode?.toString() == "SUCCESS") {
                     client = built
                     maxPacketSize = connack.restrictions.maximumPacketSize
+                    _connected.value = true
                     true
                 } else {
                     try {
                         built.disconnect()
                     } catch (_: Exception) {
                     }
+                    _connected.value = false
                     false
                 }
             } catch (e: Exception) {
@@ -64,7 +72,7 @@ class MqttService @Inject constructor(
 
     suspend fun probe(broker: MqttBroker, timeoutMs: Long = 8_000L): MqttBrokerProbe {
         val clientId = "tf-probe-${UUID.randomUUID().toString().take(8)}"
-        val probeClient = buildClient(broker, clientId)
+        val probeClient = buildClient(broker, clientId, autoReconnect = false)
         val start = System.nanoTime()
         return try {
             withTimeout(timeoutMs) {
@@ -141,14 +149,13 @@ class MqttService @Inject constructor(
         lock.withLock { disconnectUnlocked() }
     }
 
-    fun isConnected(): Boolean {
-        return client != null
-    }
+    fun isConnected(): Boolean = _connected.value
 
     private fun disconnectUnlocked() {
         val current = client
         client = null
         maxPacketSize = null
+        _connected.value = false
         if (current != null) {
             try {
                 current.disconnect()
@@ -164,12 +171,21 @@ class MqttService @Inject constructor(
         }
     }
 
-    private fun buildClient(broker: MqttBroker, clientId: String): Mqtt5AsyncClient {
-        val builder = MqttClient.builder()
+    private fun buildClient(
+        broker: MqttBroker,
+        clientId: String,
+        autoReconnect: Boolean,
+    ): Mqtt5AsyncClient {
+        var builder = MqttClient.builder()
             .useMqttVersion5()
             .identifier(clientId)
             .serverHost(broker.host)
             .serverPort(broker.port)
+        if (autoReconnect) {
+            builder = builder.automaticReconnectWithDefaultConfig()
+                .addConnectedListener { _connected.value = true }
+                .addDisconnectedListener { _connected.value = false }
+        }
         return if (broker.tls) {
             builder.sslWithDefaultConfig().buildAsync()
         } else {

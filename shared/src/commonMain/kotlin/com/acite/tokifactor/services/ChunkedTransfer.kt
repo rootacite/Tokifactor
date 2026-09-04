@@ -7,11 +7,16 @@ import java.io.RandomAccessFile
 import java.security.MessageDigest
 import kotlin.math.min
 
-object PictureTransfer {
+/**
+ * Disk-backed chunk IO for pictures, files, and long text. MQTT publish/subscribe
+ * still lives in [com.acite.tokifactor.pages.MainPageViewModel].
+ */
+object ChunkedTransfer {
     const val MAX_IN_FLIGHT_CHUNKS = 16
     const val INCOMPLETE_TIMEOUT_MS = 5_000L
     const val MAX_CHUNK_BYTES = 8 * 1024
     const val PREVIEW_MAX_BYTES = 8L * 1024 * 1024
+    const val TEXT_CHUNK_THRESHOLD_BYTES = 4 * 1024
     private const val MQTT_HEAD_BYTES = 256
     private const val JSON_OVERHEAD_BYTES = 512
     private const val DEFAULT_PACKET_BYTES = 256 * 1024
@@ -62,6 +67,12 @@ object PictureTransfer {
 
     fun deleteTransfer(transferId: String) {
         transferDir(transferId).deleteRecursively()
+    }
+
+    fun importBytes(data: ByteArray, dest: File): Pair<Long, String> {
+        dest.parentFile?.mkdirs()
+        dest.writeBytes(data)
+        return data.size.toLong() to sha256Hex(data)
     }
 
     suspend fun importSource(file: PlatformFile, dest: File): Pair<Long, String> {

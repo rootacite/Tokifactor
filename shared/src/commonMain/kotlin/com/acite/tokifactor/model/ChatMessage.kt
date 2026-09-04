@@ -15,6 +15,7 @@ data class ChatMessage(
     val fileBytes: ByteArray? = null,
     val filePath: String? = null,
     val fileSize: Long = 0,
+    val isChunkedText: Boolean = false,
 ) {
     val isTransferring: Boolean
         get() = chunksTotal > 0 && chunksReceived < chunksTotal
@@ -26,7 +27,18 @@ data class ChatMessage(
         get() = fileName != null
 
     val isImage: Boolean
-        get() = !isFile && (pic != null || chunksTotal > 0)
+        get() = !isFile && !isChunkedText && (pic != null || filePath != null || chunksTotal > 0)
+
+    val shouldPersist: Boolean
+        get() {
+            if (isTransferring) return false
+            if (isSystem && !isError) {
+                if (content.startsWith("Welcome to TokiFactor")) return false
+                if (content.startsWith("Connected to ")) return false
+                if (content.startsWith("Connection failed")) return false
+            }
+            return true
+        }
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -46,6 +58,7 @@ data class ChatMessage(
         if (fileName != other.fileName) return false
         if (filePath != other.filePath) return false
         if (fileSize != other.fileSize) return false
+        if (isChunkedText != other.isChunkedText) return false
         if (!pic.contentEquals(other.pic)) return false
         if (!fileBytes.contentEquals(other.fileBytes)) return false
 
@@ -65,6 +78,7 @@ data class ChatMessage(
         result = 31 * result + (fileName?.hashCode() ?: 0)
         result = 31 * result + (filePath?.hashCode() ?: 0)
         result = 31 * result + fileSize.hashCode()
+        result = 31 * result + isChunkedText.hashCode()
         result = 31 * result + (pic?.contentHashCode() ?: 0)
         result = 31 * result + (fileBytes?.contentHashCode() ?: 0)
         return result
