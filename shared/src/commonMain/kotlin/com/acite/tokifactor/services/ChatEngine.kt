@@ -101,12 +101,21 @@ class ChatEngine @Inject constructor(
             return
         }
         scope.launch {
+            val cachedAvatars = try {
+                PeerAvatarStore.load()
+            } catch (_: Exception) {
+                emptyMap()
+            }
             val loaded = try {
                 ChatHistoryStore.load()
             } catch (_: Exception) {
                 emptyList()
             }
             withContext(Dispatchers.Main) {
+                for ((id, entry) in cachedAvatars) {
+                    peerAvatars[id] = entry.bytes
+                    peerAvatarHash[id] = entry.hash
+                }
                 if (loaded.isNotEmpty()) {
                     val existing = messages.map { it.id }.toHashSet()
                     val restored = loaded.filter { it.id !in existing }
@@ -267,6 +276,7 @@ class ChatEngine @Inject constructor(
                 }
                         launch {
                             publishAvatarHave(force = true)
+                            requestMissingPeerAvatars()
                         }
                     }
                 } catch (e: CancellationException) {
@@ -1081,6 +1091,12 @@ class ChatEngine @Inject constructor(
             peerAvatars.remove(senderId)
             peerAvatarHash.remove(senderId)
             pendingWantAt.remove(senderId)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    PeerAvatarStore.delete(senderId)
+                } catch (_: Exception) {
+                }
+            }
             return
         }
         if (peerAvatarHash[senderId] != hash) {
@@ -1092,13 +1108,30 @@ class ChatEngine @Inject constructor(
         if (now - last < 8_000L) return
         pendingWantAt[senderId] = now
         scope.launch(Dispatchers.IO) {
-            try {
-                mqttService.publish(
-                    "tokifactor/avatar",
-                    AvatarEnvelope.want(senderId, hash).encode(),
-                )
-            } catch (_: Exception) {
-            }
+            publishAvatarWant(senderId, hash)
+        }
+    }
+
+    private suspend fun requestMissingPeerAvatars() {
+        val missing = withContext(Dispatchers.Main.immediate) {
+            messages
+                .map { it.senderId }
+                .filter { it.isNotEmpty() && it != settingsStore.deviceId && peerAvatars[it] == null }
+                .distinct()
+        }
+        for (id in missing) {
+            val hash = withContext(Dispatchers.Main.immediate) { peerAvatarHash[id] ?: "" }
+            publishAvatarWant(id, hash)
+        }
+    }
+
+    private suspend fun publishAvatarWant(senderId: String, hash: String) {
+        try {
+            mqttService.publish(
+                "tokifactor/avatar",
+                AvatarEnvelope.want(senderId, hash).encode(),
+            )
+        } catch (_: Exception) {
         }
     }
 
@@ -1138,6 +1171,10 @@ class ChatEngine @Inject constructor(
 
     private suspend fun applyPeerAvatar(envelope: AvatarEnvelope) {
         if (envelope.hash.isEmpty() || envelope.data.isEmpty()) {
+            try {
+                PeerAvatarStore.delete(envelope.id)
+            } catch (_: Exception) {
+            }
             withContext(Dispatchers.Main) {
                 peerAvatars.remove(envelope.id)
                 peerAvatarHash.remove(envelope.id)
@@ -1153,6 +1190,10 @@ class ChatEngine @Inject constructor(
         }
         val actual = ChunkedTransfer.sha256Hex(clear)
         if (!actual.equals(envelope.hash, ignoreCase = true)) return
+        try {
+            PeerAvatarStore.save(envelope.id, clear)
+        } catch (_: Exception) {
+        }
         withContext(Dispatchers.Main) {
             peerAvatars[envelope.id] = clear
             peerAvatarHash[envelope.id] = envelope.hash
