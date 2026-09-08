@@ -1,6 +1,23 @@
-# tokifactor
+<p align="center">
+  <img src="tokifactor_clip.png" alt="tokifactor logo" width="168"/>
+</p>
 
-A small Kotlin Multiplatform chat client for **Android** and **Desktop (JVM)**. Two (or more) devices that share a passphrase can exchange encrypted text, images, and files over a **public MQTT v5 broker** — no account, no phone number, and **no server of our own**.
+<h1 align="center">tokifactor</h1>
+
+<p align="center">
+  <strong>Encrypted chat · one magic string · no server of our own</strong><br/>
+  Two (or more) devices that share a passphrase can exchange encrypted text, images, and files over a public MQTT v5 broker.
+</p>
+
+<p align="center">
+  Android · Desktop (JVM) · Kotlin Multiplatform · Material 3
+</p>
+
+---
+
+## What this is
+
+TokiFactor is a small Kotlin Multiplatform chat client for **Android** and **Desktop (JVM)**. Two (or more) devices that share a passphrase can exchange encrypted text, images, and files over a **public MQTT v5 broker** — no account, no phone number, and **no server of our own**.
 
 TokiFactor is a convenience tool: spin up a shared channel on infrastructure that already exists on the public internet. It is **not** a replacement for Signal, iMessage, or a self-hosted messenger.
 
@@ -16,7 +33,7 @@ TokiFactor sits on top of that:
 
 The channel exists for as long as clients stay connected. There is nothing to deploy on the far side except this app.
 
-## What it does
+## Features
 
 - Encrypted **text** chat in a Line/WeChat-style bubble list.
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.
@@ -88,48 +105,6 @@ Images over 8 MiB are shown with the file bubble instead of an in-chat preview.
 
 Each install gets a random `deviceId`. Display name defaults to the OS device name. Avatars are encrypted on `tokifactor/avatar` and cached per sender id on the receiver.
 
-## Requirements
-
-| Piece | Version / note |
-| --- | --- |
-| JDK | **25** (Android + Desktop compile target) |
-| Android | minSdk 24, compile/target SDK 37 |
-| Gradle | 9.6.1 via `./gradlew` — do not rely on a system `gradle` |
-| Android SDK | set `sdk.dir` in `local.properties` (gitignored) |
-
-Network access is required at runtime. Android already declares `INTERNET` (and legacy storage permissions for file save/pick).
-
-## Build and run
-
-From the repo root:
-
-```bash
-# Desktop
-./gradlew :desktopApp:run
-./gradlew :desktopApp:hotRun --auto          # Compose hot reload
-
-# Android debug APK
-./gradlew :androidApp:assembleDebug
-
-# Library only (useful after Metro / graph changes)
-./gradlew :shared:compileKotlinJvm
-./gradlew :shared:compileAndroidMain
-```
-
-IDE run configurations from the Compose Multiplatform template should also work.
-
-### Packages
-
-```bash
-# Desktop installer for the current OS (dmg / msi / deb, as configured)
-./gradlew :desktopApp:packageDistributionForCurrentOS
-
-# Android release APK (debug-signed in this repo’s Gradle config)
-./gradlew :androidApp:assembleRelease
-```
-
-There is nothing to deploy on a server. “Deployment” is: install the APK or desktop package on each device, pick the same broker, set the same magic string.
-
 ## How to use
 
 1. Install tokifactor on every device that should join the channel.
@@ -167,7 +142,49 @@ Treat this as a hobby / LAN-replacement-over-MQTT client.
 
 If you need real confidentiality, run your own broker with authentication, use a proper messenger, or both.
 
-## Project layout
+## Requirements
+
+| Piece | Version / note |
+| --- | --- |
+| JDK | **25** (Android + Desktop compile target) |
+| Android | minSdk 24, compile/target SDK 37 |
+| Gradle | 9.6.1 via `./gradlew` — do not rely on a system `gradle` |
+| Android SDK | set `sdk.dir` in `local.properties` (gitignored) |
+
+Network access is required at runtime. Android already declares `INTERNET` (and legacy storage permissions for file save/pick).
+
+## Building and running
+
+From the repo root:
+
+```bash
+# Desktop
+./gradlew :desktopApp:run
+./gradlew :desktopApp:hotRun --auto          # Compose hot reload
+
+# Android debug APK
+./gradlew :androidApp:assembleDebug
+
+# Library only (useful after Metro / graph changes)
+./gradlew :shared:compileKotlinJvm
+./gradlew :shared:compileAndroidMain
+```
+
+IDE run configurations from the Compose Multiplatform template should also work.
+
+### Packages
+
+```bash
+# Desktop installer for the current OS (dmg / msi / deb, as configured)
+./gradlew :desktopApp:packageDistributionForCurrentOS
+
+# Android release APK (debug-signed in this repo’s Gradle config)
+./gradlew :androidApp:assembleRelease
+```
+
+There is nothing to deploy on a server. “Deployment” is: install the APK or desktop package on each device, pick the same broker, set the same magic string.
+
+## Code layout
 
 | Module | Role |
 | --- | --- |
