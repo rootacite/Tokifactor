@@ -29,7 +29,9 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "com.acite.tokifactor"
-            packageVersion = "0.2.0"
+            // Compose validates this as MAJOR.MINOR.PATCH: no prerelease suffix here.
+            // The "-alpha" label lives in androidApp's versionName and the git tag.
+            packageVersion = "0.2.1"
             linux {
                 iconFile.set(project.file("icons/icon.png"))
             }

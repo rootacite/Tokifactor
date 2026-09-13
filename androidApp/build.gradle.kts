@@ -29,8 +29,8 @@ android {
         applicationId = "com.acite.tokifactor"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 2
-        versionName = "0.2-alpha"
+        versionCode = 3
+        versionName = "0.2.1-alpha"
     }
     packaging {
         resources {
