@@ -23,6 +23,10 @@ class MainPageViewModel(
 
     val connected get() = chatEngine.connected
 
+    val agentStatus get() = chatEngine.agentStatus
+
+    val deviceId get() = chatEngine.deviceId
+
     val peerAvatars get() = chatEngine.peerAvatars
 
     init {
@@ -42,6 +46,9 @@ class MainPageViewModel(
         chatEngine.saveMessageFile(message, dest)
 
     fun cancelOutgoing(transferId: String) = chatEngine.cancelOutgoing(transferId)
+
+    fun respondToApproval(approvalId: String, allow: Boolean) =
+        chatEngine.respondToApproval(approvalId, allow)
 
     fun sendMessage(content: String) = chatEngine.sendMessage(content)
 

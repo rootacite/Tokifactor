@@ -16,7 +16,23 @@ data class ChatMessage(
     val filePath: String? = null,
     val fileSize: Long = 0,
     val isChunkedText: Boolean = false,
+    val agentKind: String = "",
+    val turnId: String = "",
+    val segment: Int = 0,
+    val seq: Int = 0,
+    val phase: String = "",
+    val markdown: Boolean = false,
+    val toolCallId: String = "",
+    val toolName: String = "",
+    val approvalId: String = "",
+    val requesterId: String = "",
+    val timeoutS: Int = 0,
+    val details: String = "",
+    val status: String = "",
 ) {
+    val isAgent: Boolean
+        get() = agentKind.isNotEmpty()
+
     val isTransferring: Boolean
         get() = chunksTotal > 0 && chunksReceived < chunksTotal
 
@@ -32,6 +48,15 @@ data class ChatMessage(
     val shouldPersist: Boolean
         get() {
             if (isTransferring) return false
+            if (isAgent) {
+                return when (agentKind) {
+                    "turn" -> phase == "final" || phase == "completed"
+                    "tool" -> status == "success" || status == "error"
+                    "approval" -> status == "allow" || status == "deny" || status == "timeout"
+                    "error" -> true
+                    else -> false
+                }
+            }
             if (isSystem && !isError) {
                 if (content.startsWith("Welcome to TokiFactor")) return false
                 if (content.startsWith("Connected to ")) return false
@@ -59,6 +84,19 @@ data class ChatMessage(
         if (filePath != other.filePath) return false
         if (fileSize != other.fileSize) return false
         if (isChunkedText != other.isChunkedText) return false
+        if (agentKind != other.agentKind) return false
+        if (turnId != other.turnId) return false
+        if (segment != other.segment) return false
+        if (seq != other.seq) return false
+        if (phase != other.phase) return false
+        if (markdown != other.markdown) return false
+        if (toolCallId != other.toolCallId) return false
+        if (toolName != other.toolName) return false
+        if (approvalId != other.approvalId) return false
+        if (requesterId != other.requesterId) return false
+        if (timeoutS != other.timeoutS) return false
+        if (details != other.details) return false
+        if (status != other.status) return false
         if (!pic.contentEquals(other.pic)) return false
         if (!fileBytes.contentEquals(other.fileBytes)) return false
 
@@ -79,6 +117,19 @@ data class ChatMessage(
         result = 31 * result + (filePath?.hashCode() ?: 0)
         result = 31 * result + fileSize.hashCode()
         result = 31 * result + isChunkedText.hashCode()
+        result = 31 * result + agentKind.hashCode()
+        result = 31 * result + turnId.hashCode()
+        result = 31 * result + segment
+        result = 31 * result + seq
+        result = 31 * result + phase.hashCode()
+        result = 31 * result + markdown.hashCode()
+        result = 31 * result + toolCallId.hashCode()
+        result = 31 * result + toolName.hashCode()
+        result = 31 * result + approvalId.hashCode()
+        result = 31 * result + requesterId.hashCode()
+        result = 31 * result + timeoutS
+        result = 31 * result + details.hashCode()
+        result = 31 * result + status.hashCode()
         result = 31 * result + (pic?.contentHashCode() ?: 0)
         result = 31 * result + (fileBytes?.contentHashCode() ?: 0)
         return result

@@ -97,6 +97,7 @@ object ChatHistoryStore {
 
     private fun encode(message: ChatMessage, blobPath: String?): String {
         val kind = when {
+            message.isAgent -> "agent"
             message.isFile -> "file"
             message.isImage -> "image"
             message.isSystem -> "system"
@@ -114,6 +115,21 @@ object ChatHistoryStore {
             "fileSize" to message.fileSize.toString(),
         )
         message.fileName?.let { pairs += "fileName" to it }
+        if (message.isAgent) {
+            pairs += "agentKind" to message.agentKind
+            pairs += "turnId" to message.turnId
+            pairs += "segment" to message.segment.toString()
+            pairs += "seq" to message.seq.toString()
+            pairs += "phase" to message.phase
+            pairs += "markdown" to message.markdown.toString()
+            pairs += "toolCallId" to message.toolCallId
+            pairs += "toolName" to message.toolName
+            pairs += "approvalId" to message.approvalId
+            pairs += "requesterId" to message.requesterId
+            pairs += "timeoutS" to message.timeoutS.toString()
+            pairs += "details" to message.details
+            pairs += "status" to message.status
+        }
         if (!blobPath.isNullOrBlank() && (message.isFile || message.isImage)) {
             pairs += "hasBlob" to "true"
         }
@@ -132,9 +148,45 @@ object ChatHistoryStore {
         val senderId = WireJson.extractString(json, "senderId") ?: ""
         val fileName = WireJson.extractString(json, "fileName")
         val fileSize = WireJson.extractString(json, "fileSize")?.toLongOrNull() ?: 0L
+        val agentKind = WireJson.extractString(json, "agentKind") ?: ""
+        val turnId = WireJson.extractString(json, "turnId") ?: ""
+        val segment = WireJson.extractString(json, "segment")?.toIntOrNull() ?: 0
+        val seq = WireJson.extractString(json, "seq")?.toIntOrNull() ?: 0
+        val phase = WireJson.extractString(json, "phase") ?: ""
+        val markdown = WireJson.extractString(json, "markdown")?.toBooleanStrictOrNull() ?: false
+        val toolCallId = WireJson.extractString(json, "toolCallId") ?: ""
+        val toolName = WireJson.extractString(json, "toolName") ?: ""
+        val approvalId = WireJson.extractString(json, "approvalId") ?: ""
+        val requesterId = WireJson.extractString(json, "requesterId") ?: ""
+        val timeoutS = WireJson.extractString(json, "timeoutS")?.toIntOrNull() ?: 0
+        val details = WireJson.extractString(json, "details") ?: ""
+        val status = WireJson.extractString(json, "status") ?: ""
         val blob = blobFile(id).takeIf { it.exists() }
         val blobPath = blob?.absolutePath
         return when (kind) {
+            "agent" -> ChatMessage(
+                id = id,
+                content = content,
+                pic = null,
+                isError = isError,
+                sender = sender,
+                senderId = senderId,
+                isMine = isMine,
+                isSystem = isSystem,
+                agentKind = agentKind,
+                turnId = turnId,
+                segment = segment,
+                seq = seq,
+                phase = phase,
+                markdown = markdown,
+                toolCallId = toolCallId,
+                toolName = toolName,
+                approvalId = approvalId,
+                requesterId = requesterId,
+                timeoutS = timeoutS,
+                details = details,
+                status = status,
+            )
             "file" -> ChatMessage(
                 id = id,
                 content = content,

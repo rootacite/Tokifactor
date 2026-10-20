@@ -6,6 +6,7 @@ package com.acite.tokifactor.model
  * `id` is `{transferId}:{index}:{total}` so a receiver can reassemble without extra fields.
  * `hash` is SHA-256 hex of the full plaintext image (same on every chunk).
  * `encrypted_data` is Base64 of one slice of the full-image ciphertext.
+ * `captionEncrypted` is Base64 of the encrypted caption, when the sender attached one.
  */
 data class PictureChunk(
     val transferId: String,
@@ -19,6 +20,7 @@ data class PictureChunk(
     val abort: Boolean = false,
     val reason: String = "",
     val size: Long = 0,
+    val captionEncrypted: String = "",
 ) {
     fun encode(): String {
         val id = "$transferId:$index:$total"
@@ -33,7 +35,7 @@ data class PictureChunk(
                 "reason" to reason.ifBlank { "cancel" },
             )
         } else {
-            WireJson.encodeObject(
+            val pairs = mutableListOf(
                 "id" to id,
                 "hash" to hash,
                 "encrypted_data" to encryptedData,
@@ -42,6 +44,10 @@ data class PictureChunk(
                 "avatarHash" to avatarHash,
                 "size" to size.toString(),
             )
+            if (captionEncrypted.isNotEmpty()) {
+                pairs += "caption" to captionEncrypted
+            }
+            WireJson.encodeObject(*pairs.toTypedArray())
         }
     }
 
@@ -93,6 +99,7 @@ data class PictureChunk(
                 senderId = senderId,
                 avatarHash = avatarHash,
                 size = WireJson.extractString(payload, "size")?.toLongOrNull()?.coerceAtLeast(0) ?: 0,
+                captionEncrypted = WireJson.extractString(payload, "caption") ?: "",
             )
         }
     }

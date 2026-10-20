@@ -36,6 +36,14 @@ The channel exists for as long as clients stay connected. There is nothing to de
 ## Features
 
 - Encrypted **text** chat in a Line/WeChat-style bubble list.
+- **Aki-aware status bar:** when an Aki agent answers the encrypted control probe on
+  the same broker and magic string, a compact two-line header shows its model,
+  reasoning effort, context usage, queue depth, and pending approvals. Without Aki,
+  the app stays a normal tokifactor chat client.
+- Agent-aware structured replies: Markdown, progress status, tool cards, and inline
+  tool-approval buttons for the `akid.v1` envelope.
+- Consecutive tool cards and approvals from the same turn collapse into one expandable
+  group; pending approvals auto-expand so they stay actionable.
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.
 - **Display name** and **avatar** (shown next to your bubbles on the other device).
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
@@ -62,7 +70,7 @@ Android MainActivity / Desktop main()
           │
           ▼
    public MQTT broker
-     tokifactor/text | picture | file | avatar
+     tokifactor/text | picture | file | avatar | control
 ```
 
 Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: HiveMQ, BouncyCastle, `java.nio`). `:androidApp` and `:desktopApp` are thin entry points.
@@ -72,7 +80,9 @@ Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: H
 - MQTT **v5**, QoS 1, `noLocal(true)` so the broker does not echo our own publishes.
 - Wire payload: **UTF-8 Base64 of `nonce || ciphertext`** (12-byte random nonce, then AES-GCM-SIV output).
 - Default broker: `broker.hivemq.com:8883` (TLS). You can switch in Settings; probes are cached so the list stays usable offline.
-- Text, pictures, files, and avatars use **separate topics** so an older client does not try to render a file as an image.
+- Text, pictures, files, avatars, and the encrypted Aki control probe use **separate topics**
+  so an older client does not try to render a file as an image, and clients without Aki
+  support can ignore the control topic.
 
 ### Crypto
 
@@ -114,6 +124,11 @@ Each install gets a random `deviceId`. Display name defaults to the OS device na
 5. Optionally set a display name and avatar.
 6. Wait until the send and attach buttons enable (connected). Then type, or attach a photo / file.
 
+If an Aki gateway is listening on the same broker and magic string, tokifactor
+probes `tokifactor/control` and shows the Aki status bar only after a valid
+presence or status message. Configure the broker and magic manually; tokifactor
+does not ship an Aki-specific broker preset.
+
 Peers who use a different magic string will not decrypt your traffic (and you will not see theirs). Peers who use a different broker are on a different bus.
 
 Both sides should run a **compatible app build**. Current picture/file transfer encrypts **per chunk**, and ciphertext is `nonce || body`. Older builds that used a whole-file ciphertext or a fixed nonce will not interoperate.
@@ -137,7 +152,7 @@ Treat this as a hobby / LAN-replacement-over-MQTT client.
 - Chat is not stored. Kill the app and the transcript is gone.
 - Incomplete file transfers time out after 5 seconds of silence; large or lossy links may fail more often.
 - `isConnected()` is “we still have a client object,” not a live ping.
-- No iOS. No accounts, presence, typing indicators, or read receipts.
+- No iOS. No accounts, general user presence, typing indicators, or read receipts.
 - `commonMain` uses Java APIs; this is not a pure Kotlin Multiplatform library you can drop onto native/JS as-is.
 
 If you need real confidentiality, run your own broker with authentication, use a proper messenger, or both.

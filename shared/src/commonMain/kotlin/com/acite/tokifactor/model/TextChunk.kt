@@ -20,6 +20,7 @@ data class TextChunk(
     val abort: Boolean = false,
     val reason: String = "",
     val size: Long = 0,
+    val metadata: Map<String, String> = emptyMap(),
 ) {
     fun encode(): String {
         val id = "$transferId:$index:$total"
@@ -34,7 +35,7 @@ data class TextChunk(
                 "reason" to reason.ifBlank { "cancel" },
             )
         } else {
-            WireJson.encodeObject(
+            val pairs = mutableListOf(
                 "id" to id,
                 "hash" to hash,
                 "encrypted_data" to encryptedData,
@@ -43,6 +44,10 @@ data class TextChunk(
                 "avatarHash" to avatarHash,
                 "size" to size.toString(),
             )
+            TextEnvelope.STRUCTURED_KEYS.forEach { key ->
+                metadata[key]?.let { pairs += key to it }
+            }
+            WireJson.encodeObject(*pairs.toTypedArray())
         }
     }
 
@@ -78,6 +83,11 @@ data class TextChunk(
             }
             val hash = WireJson.extractString(payload, "hash") ?: return null
             val encryptedData = WireJson.extractString(payload, "encrypted_data") ?: return null
+            val metadata = buildMap {
+                TextEnvelope.STRUCTURED_KEYS.forEach { key ->
+                    WireJson.extractString(payload, key)?.let { put(key, it) }
+                }
+            }
             val parts = id.split(':')
             if (parts.size != 3) return null
             val index = parts[1].toIntOrNull() ?: return null
@@ -94,6 +104,7 @@ data class TextChunk(
                 senderId = senderId,
                 avatarHash = avatarHash,
                 size = WireJson.extractString(payload, "size")?.toLongOrNull()?.coerceAtLeast(0) ?: 0,
+                metadata = metadata,
             )
         }
     }

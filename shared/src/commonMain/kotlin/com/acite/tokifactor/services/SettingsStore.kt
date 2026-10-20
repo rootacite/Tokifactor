@@ -4,6 +4,7 @@ import com.acite.tokifactor.appAvatarFile
 import com.acite.tokifactor.appConfigFile
 import com.acite.tokifactor.appMqttProbesFile
 import com.acite.tokifactor.defaultDisplayName
+import com.acite.tokifactor.model.CustomBrokerParse
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
@@ -21,6 +22,11 @@ class SettingsStore @Inject constructor() {
         private const val KEY_MAGIC = "magicString"
         private const val KEY_DISPLAY_NAME = "displayName"
         private const val KEY_MQTT_BROKER = "mqttBrokerId"
+        private const val KEY_CUSTOM_HOST = "mqttCustomHost"
+        private const val KEY_CUSTOM_PORT = "mqttCustomPort"
+        private const val KEY_CUSTOM_TLS = "mqttCustomTls"
+        private const val KEY_CUSTOM_USERNAME = "mqttCustomUsername"
+        private const val KEY_CUSTOM_PASSWORD = "mqttCustomPassword"
         private const val KEY_DEVICE_ID = "deviceId"
     }
 
@@ -33,11 +39,38 @@ class SettingsStore @Inject constructor() {
     var mqttBrokerId: String = MqttBrokers.DEFAULT_ID
         private set
 
+    var mqttCustomHost: String = ""
+        private set
+
+    var mqttCustomPort: String = "8883"
+        private set
+
+    var mqttCustomTls: Boolean = true
+        private set
+
+    var mqttCustomUsername: String = ""
+        private set
+
+    var mqttCustomPassword: String = ""
+        private set
+
     var deviceId: String = ""
         private set
 
     val mqttBroker: MqttBroker
-        get() = MqttBrokers.byId(mqttBrokerId)
+        get() {
+            if (mqttBrokerId == MqttBrokers.CUSTOM_ID) {
+                customBroker()?.let { return it }
+            }
+            val id = if (mqttBrokerId == MqttBrokers.CUSTOM_ID) {
+                MqttBrokers.DEFAULT_ID
+            } else {
+                mqttBrokerId
+            }
+            return MqttBrokers.byId(id)
+        }
+
+    fun customEndpointKey(): String? = customBroker()?.endpointKey()
 
     var avatarBytes: ByteArray? = null
         private set
@@ -50,14 +83,27 @@ class SettingsStore @Inject constructor() {
         val parsed = if (file.exists()) parseToml(file.readText()) else emptyMap()
         magicString = parsed[KEY_MAGIC]?.ifBlank { null } ?: DEFAULT_MAGIC_STRING
         displayName = parsed[KEY_DISPLAY_NAME]?.ifBlank { null } ?: defaultDisplayName()
-        mqttBrokerId = MqttBrokers.byId(parsed[KEY_MQTT_BROKER]).id
+        mqttCustomHost = parsed[KEY_CUSTOM_HOST].orEmpty()
+        mqttCustomPort = parsed[KEY_CUSTOM_PORT]?.takeIf { it.isNotBlank() } ?: "8883"
+        mqttCustomTls = !parsed[KEY_CUSTOM_TLS].equals("false", ignoreCase = true)
+        mqttCustomUsername = parsed[KEY_CUSTOM_USERNAME].orEmpty()
+        mqttCustomPassword = parsed[KEY_CUSTOM_PASSWORD].orEmpty()
+        val storedBroker = parsed[KEY_MQTT_BROKER]
+        mqttBrokerId = when (storedBroker) {
+            MqttBrokers.CUSTOM_ID -> MqttBrokers.CUSTOM_ID
+            null, "" -> MqttBrokers.DEFAULT_ID
+            else -> MqttBrokers.byId(storedBroker).id
+        }
+        val customWasUnusable = mqttBrokerId == MqttBrokers.CUSTOM_ID && customBroker() == null
+        if (customWasUnusable) mqttBrokerId = MqttBrokers.DEFAULT_ID
         deviceId = parsed[KEY_DEVICE_ID]?.ifBlank { null } ?: UUID.randomUUID().toString()
         avatarBytes = loadAvatar()
         mqttProbes = loadMqttProbes()
         if (!file.exists() ||
             parsed[KEY_DISPLAY_NAME].isNullOrBlank() ||
             parsed[KEY_MQTT_BROKER].isNullOrBlank() ||
-            parsed[KEY_DEVICE_ID].isNullOrBlank()
+            parsed[KEY_DEVICE_ID].isNullOrBlank() ||
+            customWasUnusable
         ) {
             persist()
         }
@@ -73,10 +119,43 @@ class SettingsStore @Inject constructor() {
         persist()
     }
 
-    fun updateMqttBroker(id: String) {
-        mqttBrokerId = MqttBrokers.byId(id).id
+    fun updateMqttSelection(selectedId: String, draft: CustomBrokerParse) {
+        val previousKey = customEndpointKey()
+        val broker = draft.broker
+        if (broker != null) {
+            mqttCustomHost = broker.host
+            mqttCustomPort = broker.port.toString()
+            mqttCustomTls = broker.tls
+            mqttCustomUsername = broker.username
+            mqttCustomPassword = broker.password
+        } else {
+            mqttCustomHost = draft.host
+            mqttCustomPort = draft.portText.ifBlank { mqttCustomPort }
+            mqttCustomTls = draft.tls
+            mqttCustomUsername = draft.username
+            mqttCustomPassword = draft.password
+        }
+        mqttBrokerId = when {
+            selectedId == MqttBrokers.CUSTOM_ID && broker != null -> MqttBrokers.CUSTOM_ID
+            selectedId == MqttBrokers.CUSTOM_ID ->
+                if (mqttBrokerId == MqttBrokers.CUSTOM_ID) MqttBrokers.DEFAULT_ID else mqttBrokerId
+            else -> MqttBrokers.byId(selectedId).id
+        }
+        if (previousKey != customEndpointKey()) {
+            mqttProbes = mqttProbes - MqttBrokers.CUSTOM_ID
+            persistMqttProbes()
+        }
         persist()
     }
+
+    private fun customBroker(): MqttBroker? =
+        MqttBrokers.parseCustom(
+            mqttCustomHost,
+            mqttCustomPort,
+            mqttCustomTls,
+            mqttCustomUsername,
+            mqttCustomPassword,
+        ).broker
 
     @Synchronized
     fun updateMqttProbe(id: String, probe: MqttBrokerProbe) {
@@ -115,7 +194,7 @@ class SettingsStore @Inject constructor() {
         } catch (_: Exception) {
             return emptyMap()
         }
-        val known = MqttBrokers.ALL.map { it.id }.toSet()
+        val known = MqttBrokers.ALL.map { it.id }.toSet() + MqttBrokers.CUSTOM_ID
         val out = mutableMapOf<String, MqttBrokerProbe>()
         for ((id, raw) in parsed) {
             if (id !in known) continue
@@ -135,10 +214,11 @@ class SettingsStore @Inject constructor() {
         file.parentFile?.mkdirs()
         val body = buildString {
             append("# MQTT connect probes: milliseconds or error token\n")
-            for (broker in MqttBrokers.ALL) {
-                val probe = mqttProbes[broker.id] ?: continue
+            val ids = MqttBrokers.ALL.map { it.id } + MqttBrokers.CUSTOM_ID
+            for (id in ids) {
+                val probe = mqttProbes[id] ?: continue
                 val value = probe.latencyMs?.toString() ?: (probe.error ?: "failed")
-                append("${broker.id} = \"${escapeTomlString(value)}\"\n")
+                append("$id = \"${escapeTomlString(value)}\"\n")
             }
         }
         file.writeText(body)
@@ -151,6 +231,11 @@ class SettingsStore @Inject constructor() {
             "$KEY_MAGIC = \"${escapeTomlString(magicString)}\"\n" +
                 "$KEY_DISPLAY_NAME = \"${escapeTomlString(displayName)}\"\n" +
                 "$KEY_MQTT_BROKER = \"${escapeTomlString(mqttBrokerId)}\"\n" +
+                "$KEY_CUSTOM_HOST = \"${escapeTomlString(mqttCustomHost)}\"\n" +
+                "$KEY_CUSTOM_PORT = \"${escapeTomlString(mqttCustomPort)}\"\n" +
+                "$KEY_CUSTOM_TLS = \"${mqttCustomTls}\"\n" +
+                "$KEY_CUSTOM_USERNAME = \"${escapeTomlString(mqttCustomUsername)}\"\n" +
+                "$KEY_CUSTOM_PASSWORD = \"${escapeTomlString(mqttCustomPassword)}\"\n" +
                 "$KEY_DEVICE_ID = \"${escapeTomlString(deviceId)}\"\n"
         )
     }

@@ -23,6 +23,7 @@ ktoml = "0.7.1"
 kotlinx-datetime = "0.8.0"
 coil = "3.5.0"
 materialIconsExtended = "1.7.3"
+markdownRenderer = "0.45.0"
 metro = "1.3.2"
 metroxViewmodelCompose = "1.3.2"
 navigationCompose = "2.9.2"
@@ -58,6 +59,7 @@ kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-ktor = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 material-icons-extended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
+markdown-renderer-m3 = { module = "com.mikepenz:multiplatform-markdown-renderer-m3", version.ref = "markdownRenderer" }
 metrox-viewmodel-compose = { module = "dev.zacsweers.metro:metrox-viewmodel-compose", version.ref = "metroxViewmodelCompose" }
 navigation-compose = { module = "org.jetbrains.androidx.navigation:navigation-compose", version.ref = "navigationCompose" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }

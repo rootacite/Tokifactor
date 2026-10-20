@@ -33,12 +33,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -60,6 +64,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -74,6 +79,12 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
+import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.approvalBadgeLabel
+import com.acite.tokifactor.model.modelLabel
+import com.acite.tokifactor.model.queueBadgeLabel
+import com.acite.tokifactor.model.statusLabel
+import com.mikepenz.markdown.m3.Markdown
 import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.compose.rememberFileSaverLauncher
@@ -137,6 +148,52 @@ fun ByteImage(
     )
 }
 
+private sealed class ChatDisplayItem {
+    abstract val key: String
+
+    data class Single(val message: ChatMessage) : ChatDisplayItem() {
+        override val key: String = "message:${message.id}"
+    }
+
+    data class ToolGroup(
+        val id: String,
+        val messages: List<ChatMessage>,
+    ) : ChatDisplayItem() {
+        override val key: String = "tools:$id"
+    }
+}
+
+private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplayItem> {
+    val items = mutableListOf<ChatDisplayItem>()
+    var index = 0
+    while (index < messages.size) {
+        val message = messages[index]
+        if (!message.isGroupableToolStep()) {
+            items += ChatDisplayItem.Single(message)
+            index += 1
+            continue
+        }
+        val group = mutableListOf(message)
+        var next = index + 1
+        while (next < messages.size) {
+            val candidate = messages[next]
+            if (!candidate.isGroupableToolStep() || candidate.turnId != message.turnId) break
+            group += candidate
+            next += 1
+        }
+        if (group.size > 1) {
+            items += ChatDisplayItem.ToolGroup(id = group.first().id, messages = group)
+        } else {
+            items += ChatDisplayItem.Single(message)
+        }
+        index = next
+    }
+    return items
+}
+
+private fun ChatMessage.isGroupableToolStep(): Boolean =
+    isAgent && (agentKind == "tool" || agentKind == "approval")
+
 @Composable
 fun MainPage(
     onOpenSettings: () -> Unit,
@@ -148,6 +205,7 @@ fun MainPage(
     val selectedIds = remember { mutableStateListOf<String>() }
     var confirmDelete by remember { mutableStateOf(false) }
     var lastCount by remember { mutableIntStateOf(-1) }
+    val agentStatus = viewModel.agentStatus
 
     val imagePickerLauncher = rememberFilePickerLauncher(
         type = PickerType.Image
@@ -171,34 +229,44 @@ fun MainPage(
         confirmDelete = false
     }
 
-    fun enterSelection(id: String) {
+    fun displayItemIds(item: ChatDisplayItem): List<String> = when (item) {
+        is ChatDisplayItem.Single -> listOf(item.message.id)
+        is ChatDisplayItem.ToolGroup -> item.messages.map { it.id }
+    }
+
+    fun enterSelection(item: ChatDisplayItem) {
+        val ids = displayItemIds(item)
         if (!selectionMode) {
             selectionMode = true
             selectedIds.clear()
-            selectedIds.add(id)
-        } else if (id in selectedIds) {
-            selectedIds.remove(id)
+            selectedIds.addAll(ids)
+        } else if (ids.all { it in selectedIds }) {
+            selectedIds.removeAll(ids.toSet())
             if (selectedIds.isEmpty()) exitSelection()
         } else {
-            selectedIds.add(id)
+            ids.filter { it !in selectedIds }.forEach { selectedIds.add(it) }
         }
     }
 
-    fun toggleSelected(id: String) {
-        if (id in selectedIds) {
-            selectedIds.remove(id)
+    fun toggleSelected(item: ChatDisplayItem) {
+        val ids = displayItemIds(item)
+        if (ids.all { it in selectedIds }) {
+            selectedIds.removeAll(ids.toSet())
             if (selectedIds.isEmpty()) exitSelection()
         } else {
-            selectedIds.add(id)
+            ids.filter { it !in selectedIds }.forEach { selectedIds.add(it) }
         }
     }
+
+    val displayItems = buildChatDisplayItems(viewModel.messages)
+    val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(Unit) {
         viewModel.refreshSettings()
     }
 
-    LaunchedEffect(viewModel.messages.size) {
-        val size = viewModel.messages.size
+    LaunchedEffect(displayItems.size) {
+        val size = displayItems.size
         if (size > 0 && size > lastCount) {
             if (lastCount <= 0) {
                 listState.scrollToItem(size - 1)
@@ -209,12 +277,31 @@ fun MainPage(
         lastCount = size
     }
 
+    val latestMessage = viewModel.messages.lastOrNull()
+    LaunchedEffect(
+        latestMessage?.id,
+        latestMessage?.content,
+        latestMessage?.status,
+        latestMessage?.seq,
+    ) {
+        val size = displayItems.size
+        if (size == 0) return@LaunchedEffect
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (lastVisible >= size - 3) {
+            listState.animateScrollToItem(size - 1)
+        }
+    }
+
     OnSystemBack(enabled = selectionMode) {
         exitSelection()
     }
 
     val listTopPad by animateDpAsState(
-        targetValue = if (selectionMode) 56.dp else 16.dp,
+        targetValue = when {
+            selectionMode -> 56.dp
+            agentStatus.present -> 96.dp
+            else -> 16.dp
+        },
         animationSpec = tween(220),
         label = "listTopPad",
     )
@@ -239,50 +326,85 @@ fun MainPage(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(
-                items = viewModel.messages,
-                key = { it.id }
-            ) { message ->
-                val selected = message.id in selectedIds
+                items = displayItems,
+                key = { it.key }
+            ) { item ->
+                val ids = displayItemIds(item)
+                val selected = ids.isNotEmpty() && ids.all { it in selectedIds }
                 SelectableMessageRow(
                     selected = selected,
                     selectionMode = selectionMode,
-                    onToggle = { toggleSelected(message.id) },
-                    onLongPress = { enterSelection(message.id) },
+                    onToggle = { toggleSelected(item) },
+                    onLongPress = { enterSelection(item) },
                     modifier = Modifier.animateItem(),
                 ) {
-                    when {
-                        message.isSystem -> SystemChip(message = message)
-                        message.isFile -> FileBubble(
-                            message = message,
-                            mineAvatar = viewModel.avatarBytes,
-                            peerAvatar = viewModel.peerAvatars[message.senderId],
-                            onSaveTo = { dest -> viewModel.saveMessageFile(message, dest) },
-                            onCancel = if (message.isMine && message.isTransferring) {
-                                { viewModel.cancelOutgoing(message.id) }
-                            } else {
-                                null
+                    when (item) {
+                        is ChatDisplayItem.ToolGroup -> AgentToolGroupCard(
+                            messages = item.messages,
+                            expanded = expandedToolGroups[item.id] == true,
+                            onExpandedChange = { expanded ->
+                                expandedToolGroups[item.id] = expanded
+                            },
+                            connected = viewModel.connected,
+                            localDeviceId = viewModel.deviceId,
+                            onApprovalRespond = { approvalId, allow ->
+                                viewModel.respondToApproval(approvalId, allow)
                             },
                         )
-                        message.isImage -> ImageBubble(
-                            message = message,
-                            mineAvatar = viewModel.avatarBytes,
-                            peerAvatar = viewModel.peerAvatars[message.senderId],
-                            onCancel = if (message.isMine && message.isTransferring) {
-                                { viewModel.cancelOutgoing(message.id) }
-                            } else {
-                                null
-                            },
-                        )
-                        else -> TextBubble(
-                            message = message,
-                            mineAvatar = viewModel.avatarBytes,
-                            peerAvatar = viewModel.peerAvatars[message.senderId],
-                            onCancel = if (message.isMine && message.isTransferring) {
-                                { viewModel.cancelOutgoing(message.id) }
-                            } else {
-                                null
-                            },
-                        )
+                        is ChatDisplayItem.Single -> {
+                            val message = item.message
+                            when {
+                                message.isSystem -> SystemChip(message = message)
+                                message.isAgent -> when (message.agentKind) {
+                                    "approval" -> AgentApprovalCard(
+                                        message = message,
+                                        connected = viewModel.connected,
+                                        localDeviceId = viewModel.deviceId,
+                                        onRespond = { allow ->
+                                            viewModel.respondToApproval(message.approvalId, allow)
+                                        },
+                                    )
+                                    "tool" -> AgentToolCard(message = message)
+                                    "error" -> SystemChip(message = message)
+                                    else -> AgentTextBubble(
+                                        message = message,
+                                        mineAvatar = viewModel.avatarBytes,
+                                        peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    )
+                                }
+                                message.isFile -> FileBubble(
+                                    message = message,
+                                    mineAvatar = viewModel.avatarBytes,
+                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    onSaveTo = { dest -> viewModel.saveMessageFile(message, dest) },
+                                    onCancel = if (message.isMine && message.isTransferring) {
+                                        { viewModel.cancelOutgoing(message.id) }
+                                    } else {
+                                        null
+                                    },
+                                )
+                                message.isImage -> ImageBubble(
+                                    message = message,
+                                    mineAvatar = viewModel.avatarBytes,
+                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    onCancel = if (message.isMine && message.isTransferring) {
+                                        { viewModel.cancelOutgoing(message.id) }
+                                    } else {
+                                        null
+                                    },
+                                )
+                                else -> TextBubble(
+                                    message = message,
+                                    mineAvatar = viewModel.avatarBytes,
+                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    onCancel = if (message.isMine && message.isTransferring) {
+                                        { viewModel.cancelOutgoing(message.id) }
+                                    } else {
+                                        null
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -333,6 +455,18 @@ fun MainPage(
                     }
                 }
             }
+        }
+
+        AnimatedVisibility(
+            visible = agentStatus.present && !selectionMode,
+            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
+            exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            AkiStatusBar(
+                status = agentStatus,
+                avatar = viewModel.peerAvatars[agentStatus.agentId],
+            )
         }
 
         AnimatedVisibility(
@@ -450,6 +584,181 @@ fun MainPage(
 private enum class MenuAction { File, Photo, Settings }
 
 private enum class ComposerDragLock { None, Send, Menu, Ignore }
+
+@Composable
+private fun AkiStatusBar(
+    status: AgentStatus,
+    avatar: ByteArray?,
+) {
+    val attention = status.pendingApprovals > 0
+    val working = status.activeTurn || status.queueDepth > 0
+    val dotColor = when {
+        attention -> MaterialTheme.colorScheme.error
+        working -> MaterialTheme.colorScheme.primary
+        !status.backendReady -> MaterialTheme.colorScheme.error
+        else -> Color(0xFF4CAF50)
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        tonalElevation = 3.dp,
+        shadowElevation = 4.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (avatar != null) {
+                    ByteImage(
+                        imageBytes = avatar,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(27.dp)
+                            .clip(CircleShape),
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(27.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
+                Text(
+                    text = status.agentName.ifBlank { "Aki" },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(dotColor),
+                )
+                Text(
+                    text = status.statusLabel(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 150.dp),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                val model = status.modelLabel()
+                if (model.isNotBlank()) {
+                    StatusPill(
+                        text = model,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                if (status.reasoning.isNotBlank()) {
+                    StatusPill(
+                        text = status.reasoning,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                val percent = status.contextPercent
+                if (percent != null) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "${(percent * 100).roundToInt()}%",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        LinearProgressIndicator(
+                            progress = { percent },
+                            modifier = Modifier
+                                .width(48.dp)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                    }
+                }
+                status.queueBadgeLabel()?.let { label ->
+                    StatusBadge(label)
+                }
+                status.approvalBadgeLabel()?.let { label ->
+                    StatusBadge(
+                        text = label,
+                        attention = true,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = modifier,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+private fun StatusBadge(
+    text: String,
+    attention: Boolean = false,
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (attention) {
+            MaterialTheme.colorScheme.errorContainer
+        } else {
+            MaterialTheme.colorScheme.secondaryContainer
+        },
+        contentColor = if (attention) {
+            MaterialTheme.colorScheme.onErrorContainer
+        } else {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        },
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+        )
+    }
+}
 
 @Composable
 private fun SendActionButton(
@@ -941,6 +1250,496 @@ private fun SystemChip(
 }
 
 @Composable
+private fun AgentStatusChip() {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.82f),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    text = "Aki is working…",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentTextBubble(
+    message: ChatMessage,
+    mineAvatar: ByteArray?,
+    peerAvatar: ByteArray?,
+) {
+    if (message.phase == "started" && message.content.isBlank()) {
+        AgentStatusChip()
+        return
+    }
+    ChatRow(
+        isMine = false,
+        sender = message.sender,
+        mineAvatar = mineAvatar,
+        peerAvatar = peerAvatar,
+    ) {
+        Surface(
+            shape = bubbleShape(false),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 1.dp,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                SelectionContainer {
+                    Markdown(
+                        content = message.content,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (message.phase == "progress") {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(12.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Text(
+                            text = "Still working…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+        CopyIconButton(
+            text = message.content,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun AgentToolCard(message: ChatMessage) {
+    ChatRow(
+        isMine = false,
+        sender = message.sender,
+        mineAvatar = null,
+        peerAvatar = null,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (message.status == "error") {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            },
+        ) {
+            AgentToolRow(message = message, modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp))
+        }
+    }
+}
+
+@Composable
+private fun AgentToolGroupCard(
+    messages: List<ChatMessage>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    connected: Boolean,
+    localDeviceId: String,
+    onApprovalRespond: (String, Boolean) -> Unit,
+) {
+    val toolMessages = messages.filter { it.agentKind == "tool" }
+    val approvalMessages = messages.filter { it.agentKind == "approval" }
+    val requiresAction = approvalMessages.any {
+        it.status == "pending" || it.status == "allow_pending" || it.status == "deny_pending"
+    }
+    LaunchedEffect(requiresAction) {
+        if (requiresAction) onExpandedChange(true)
+    }
+    val effectiveExpanded = expanded || requiresAction
+    val anyRunning = toolMessages.any { it.status == "running" }
+    val anyError = messages.any {
+        it.status == "error" || (it.agentKind == "approval" && it.status == "timeout")
+    }
+    val names = toolMessages.map { it.toolName.ifBlank { "Tool" } }.distinct()
+    val summary = buildList {
+        addAll(names)
+        if (approvalMessages.isNotEmpty()) {
+            add(if (approvalMessages.size == 1) "approval" else "${approvalMessages.size} approvals")
+        }
+    }.joinToString(" · ")
+    val title = buildList {
+        if (toolMessages.isNotEmpty()) {
+            add("${toolMessages.size} tool call${if (toolMessages.size == 1) "" else "s"}")
+        }
+        if (approvalMessages.isNotEmpty()) {
+            add("${approvalMessages.size} approval${if (approvalMessages.size == 1) "" else "s"}")
+        }
+    }.joinToString(" · ")
+    val groupStatus = when {
+        requiresAction -> "Approval needed"
+        anyRunning -> "Running"
+        anyError -> "Failed"
+        else -> "Completed"
+    }
+    val containerColor = when {
+        requiresAction -> MaterialTheme.colorScheme.secondaryContainer
+        anyError -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when {
+        requiresAction -> MaterialTheme.colorScheme.onSecondaryContainer
+        anyError -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    ChatRow(
+        isMine = false,
+        sender = messages.first().sender,
+        mineAvatar = null,
+        peerAvatar = null,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = containerColor,
+            contentColor = contentColor,
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .then(
+                            if (requiresAction) Modifier
+                            else Modifier.clickable { onExpandedChange(!effectiveExpanded) }
+                        )
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Build,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (anyError) {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(
+                            text = "$summary · $groupStatus",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = contentColor.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (requiresAction) {
+                        Text(
+                            text = "Action",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = contentColor.copy(alpha = 0.8f),
+                        )
+                    } else if (anyRunning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else if (anyError) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    if (!requiresAction) {
+                        Icon(
+                            imageVector = if (effectiveExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (effectiveExpanded) "Collapse tool calls" else "Expand tool calls",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                AnimatedVisibility(visible = effectiveExpanded) {
+                    Column {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+                        )
+                        messages.forEachIndexed { index, message ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                                )
+                            }
+                            if (message.agentKind == "approval") {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = approvalContainerColor(message.status),
+                                    contentColor = approvalContentColor(message.status),
+                                    modifier = Modifier.padding(8.dp),
+                                ) {
+                                    AgentApprovalContent(
+                                        message = message,
+                                        connected = connected,
+                                        localDeviceId = localDeviceId,
+                                        onRespond = { allow ->
+                                            onApprovalRespond(message.approvalId, allow)
+                                        },
+                                        modifier = Modifier.padding(10.dp),
+                                        contentColor = approvalContentColor(message.status),
+                                    )
+                                }
+                            } else {
+                                AgentToolRow(
+                                    message = message,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentToolRow(
+    message: ChatMessage,
+    modifier: Modifier = Modifier,
+) {
+    val status = message.status
+    val label = when (status) {
+        "running" -> "Running"
+        "success" -> "Completed"
+        "error" -> "Failed"
+        "complete" -> "Completed"
+        else -> status.replaceFirstChar { it.uppercase() }
+    }
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.Build,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = if (status == "error") {
+                MaterialTheme.colorScheme.onErrorContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = message.toolName.ifBlank { "Tool" },
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        when (status) {
+            "running" -> CircularProgressIndicator(
+                modifier = Modifier.size(15.dp),
+                strokeWidth = 2.dp,
+            )
+            "error" -> Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = null,
+                modifier = Modifier.size(17.dp),
+            )
+            else -> Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                modifier = Modifier.size(17.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentApprovalCard(
+    message: ChatMessage,
+    connected: Boolean,
+    localDeviceId: String,
+    onRespond: (Boolean) -> Unit,
+) {
+    ChatRow(
+        isMine = false,
+        sender = message.sender,
+        mineAvatar = null,
+        peerAvatar = null,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = approvalContainerColor(message.status),
+            contentColor = approvalContentColor(message.status),
+            tonalElevation = 2.dp,
+        ) {
+            AgentApprovalContent(
+                message = message,
+                connected = connected,
+                localDeviceId = localDeviceId,
+                onRespond = onRespond,
+                modifier = Modifier.padding(12.dp),
+                contentColor = approvalContentColor(message.status),
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentApprovalContent(
+    message: ChatMessage,
+    connected: Boolean,
+    localDeviceId: String,
+    onRespond: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
+) {
+    var expanded by remember(message.approvalId) { mutableStateOf(false) }
+    val isRequester = message.requesterId.isEmpty() || message.requesterId == localDeviceId
+    val canAct = connected && isRequester && message.status == "pending"
+    val statusLabel = when (message.status) {
+        "pending" -> "Waiting for approval"
+        "allow_pending" -> "Sending approval…"
+        "deny_pending" -> "Sending denial…"
+        "allow" -> "Approved"
+        "deny" -> "Denied"
+        "timeout" -> "Timed out"
+        else -> message.status.replaceFirstChar { it.uppercase() }
+    }
+    Column(modifier = modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.Build,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = "Tool approval · ${message.toolName.ifBlank { "Tool" }}",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = statusLabel,
+            style = MaterialTheme.typography.labelMedium,
+            color = contentColor.copy(alpha = 0.8f),
+        )
+        if (message.timeoutS > 0 && message.status == "pending") {
+            Text(
+                text = "Request expires after ${message.timeoutS}s",
+                style = MaterialTheme.typography.labelSmall,
+                color = contentColor.copy(alpha = 0.7f),
+            )
+        }
+        if (message.details.isNotBlank()) {
+            TextButton(
+                onClick = { expanded = !expanded },
+                contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+            ) {
+                Text(if (expanded) "Hide details" else "Show details")
+            }
+            if (expanded) {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = message.details,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                        )
+                    }
+                }
+            }
+        }
+        when {
+            canAct -> {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onRespond(true) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Allow")
+                    }
+                    OutlinedButton(
+                        onClick = { onRespond(false) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Deny")
+                    }
+                }
+            }
+            !isRequester && message.status == "pending" -> {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Waiting for the original sender to decide.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = contentColor.copy(alpha = 0.75f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun approvalContainerColor(status: String): Color =
+    if (status == "timeout") {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+
+@Composable
+private fun approvalContentColor(status: String): Color =
+    if (status == "timeout") {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+
+@Composable
 private fun LetterAvatar(name: String) {
     val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     Box(
@@ -1263,64 +2062,79 @@ fun ImageBubble(
         peerAvatar = peerAvatar,
         modifier = modifier,
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .widthIn(max = 220.dp)
-                .heightIn(min = if (hasImage) 0.dp else 160.dp, max = 240.dp)
                 .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .then(
-                    if (hasImage) Modifier.clickable { showFull = true } else Modifier
-                ),
-            contentAlignment = Alignment.Center
+                .background(MaterialTheme.colorScheme.surfaceVariant),
         ) {
-            if (hasImage) {
-                MessageImage(
-                    message = message,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .widthIn(max = 220.dp)
-                        .heightIn(max = 240.dp)
-                )
-            } else {
-                Spacer(modifier = Modifier.size(220.dp, 160.dp))
-            }
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 220.dp)
+                    .heightIn(min = if (hasImage) 0.dp else 160.dp, max = 240.dp)
+                    .then(
+                        if (hasImage) Modifier.clickable { showFull = true } else Modifier
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (hasImage) {
+                    MessageImage(
+                        message = message,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .widthIn(max = 220.dp)
+                            .heightIn(max = 240.dp)
+                    )
+                } else {
+                    Spacer(modifier = Modifier.size(220.dp, 160.dp))
+                }
 
-            if (message.isTransferring) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(Color.Black.copy(alpha = 0.45f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                if (message.isTransferring) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = if (message.isMine) "Sending" else "Receiving",
-                            style = MaterialTheme.typography.labelLarge,
-                            color = Color.White
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        LinearProgressIndicator(
-                            progress = { message.transferProgress },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = transferStatusLabel(message),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color.White
-                        )
-                        if (onCancel != null) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = if (message.isMine) "Sending" else "Receiving",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = Color.White
+                            )
                             Spacer(modifier = Modifier.height(8.dp))
-                            TextButton(onClick = onCancel) {
-                                Text("Cancel", color = Color.White)
+                            LinearProgressIndicator(
+                                progress = { message.transferProgress },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = transferStatusLabel(message),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White
+                            )
+                            if (onCancel != null) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                TextButton(onClick = onCancel) {
+                                    Text("Cancel", color = Color.White)
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            if (message.content.isNotBlank()) {
+                Text(
+                    text = message.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                )
             }
         }
     }
@@ -1342,6 +2156,21 @@ fun ImageBubble(
                         .fillMaxSize()
                         .padding(16.dp)
                 )
+                if (message.content.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(Color.Black.copy(alpha = 0.55f))
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White
+                        )
+                    }
+                }
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)

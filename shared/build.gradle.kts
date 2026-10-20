@@ -53,6 +53,7 @@ kotlin {
             implementation(libs.navigation.compose)
 
             implementation(libs.material.icons.extended)
+            implementation(libs.markdown.renderer.m3)
             implementation(libs.okio)
 
             implementation(libs.ktoml.core)

@@ -6,14 +6,16 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.acite.tokifactor.copyFileToPlatformFile
+import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.AvatarEnvelope
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.InboundNotice
-import com.acite.tokifactor.model.MqttBrokers
 import com.acite.tokifactor.model.PictureChunk
 import com.acite.tokifactor.model.TextChunk
 import com.acite.tokifactor.model.TextEnvelope
+import com.acite.tokifactor.model.shouldExpireAki
+import com.acite.tokifactor.model.shouldProbeAki
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
@@ -47,6 +49,13 @@ class ChatEngine @Inject constructor(
     private val mqttService: MqttService,
     private val settingsStore: SettingsStore,
 ) {
+    companion object {
+        private const val CONTROL_TOPIC = "tokifactor/control"
+        private const val STATUS_TIMEOUT_MS = 30_000L
+        private const val PROBE_RETRY_MS = 15_000L
+        private const val PROTOCOL_VERSION = 1
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val started = AtomicBoolean(false)
     private val historyReady = AtomicBoolean(false)
@@ -59,6 +68,12 @@ class ChatEngine @Inject constructor(
 
     var connected by mutableStateOf(false)
         private set
+
+    var agentStatus by mutableStateOf(AgentStatus())
+        private set
+
+    val deviceId: String
+        get() = settingsStore.deviceId
 
     private val _connectionStatus = MutableStateFlow("Connecting…")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
@@ -82,6 +97,7 @@ class ChatEngine @Inject constructor(
         val fileSize: Long,
         val received: BooleanArray,
         val isChunkedText: Boolean = false,
+        var caption: String = "",
         var count: Int = 0,
     )
 
@@ -91,7 +107,14 @@ class ChatEngine @Inject constructor(
     private val outgoingJobs = mutableMapOf<String, Job>()
 
     private var mqttSessionJob: Job? = null
-    private var sessionBrokerId: String? = null
+    private var sessionChannelKey: String? = null
+    private val sessionGeneration = AtomicInteger(0)
+    private var akiControlJob: Job? = null
+    @Volatile private var controlReady = false
+    private var akiAgentId: String? = null
+    @Volatile private var akiPresent = false
+    @Volatile private var lastAkiSeenAt = 0L
+    @Volatile private var lastProbeSentAt = 0L
     private var persistJob: Job? = null
     private val persistGeneration = AtomicInteger(0)
 
@@ -134,14 +157,18 @@ class ChatEngine @Inject constructor(
 
     fun refreshSettings() {
         avatarBytes = settingsStore.avatarBytes
-        if (settingsStore.mqttBrokerId != sessionBrokerId) {
+        if (channelKey() != sessionChannelKey) {
             startMqttSession()
         } else if (connected) {
             scope.launch {
+                publishAkiProbe()
                 publishAvatarHave()
             }
         }
     }
+
+    private fun channelKey(): String =
+        settingsStore.mqttBroker.connectionKey() + "\u0000" + settingsStore.magicString
 
     private fun setConnected(value: Boolean, status: String) {
         connected = value
@@ -149,25 +176,30 @@ class ChatEngine @Inject constructor(
     }
 
     private fun startMqttSession() {
-        val wantedBrokerId = settingsStore.mqttBrokerId
-        sessionBrokerId = wantedBrokerId
+        val generation = sessionGeneration.incrementAndGet()
+        sessionChannelKey = channelKey()
         mqttSessionJob?.cancel()
+        controlReady = false
+        stopAkiControlLoop(clearIdentity = true)
         mqttSessionJob = scope.launch {
             var backoffMs = 1_000L
             var announcedFailure = false
-            while (isActive) {
-                val brokerId = settingsStore.mqttBrokerId
-                sessionBrokerId = brokerId
-                val broker = MqttBrokers.byId(brokerId)
+            while (isActive && generation == sessionGeneration.get()) {
+                val broker = settingsStore.mqttBroker
+                sessionChannelKey = channelKey()
                 withContext(Dispatchers.Main) {
                     setConnected(false, if (announcedFailure) "Reconnecting…" else "Connecting…")
                 }
                 try {
                     mqttService.disconnect()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                 }
                 val s = try {
                     mqttService.connect(broker)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {
                     false
                 }
@@ -213,6 +245,15 @@ class ChatEngine @Inject constructor(
                                 }
                                 withContext(Dispatchers.Main) {
                                     setConnected(live, label)
+                                    if (generation == sessionGeneration.get()) {
+                                        if (!live) {
+                                            stopAkiControlLoop(clearIdentity = false)
+                                        } else if (controlReady &&
+                                            akiControlJob?.isActive != true
+                                        ) {
+                                            startAkiControlLoop()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -230,12 +271,7 @@ class ChatEngine @Inject constructor(
                                             val clear = SecureMessageChannel.decrypt(chip, settingsStore.magicString).decodeToString()
                                             val envelope = TextEnvelope.decode(clear)
                                             if (envelope != null) {
-                                                addChatText(
-                                                    envelope.text,
-                                                    sender = envelope.sender,
-                                                    senderId = envelope.senderId,
-                                                    isMine = false,
-                                                )
+                                                applyIncomingEnvelope(envelope)
                                                 notePeerAvatar(envelope.senderId, envelope.avatarHash)
                                             } else {
                                                 addChatText(clear, sender = "Unknown", isMine = false)
@@ -274,14 +310,34 @@ class ChatEngine @Inject constructor(
                             } catch (_: Exception) {}
                         }
                 }
+                launch {
+                    mqttService.subscribe(CONTROL_TOPIC)
+                        .collect { message ->
+                            try {
+                                val envelope = decodeEnvelope(message.payload)
+                                    ?: return@collect
+                                withContext(Dispatchers.Main) {
+                                    applyControlEnvelope(envelope)
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
+                }
                         launch {
                             publishAvatarHave(force = true)
                             requestMissingPeerAvatars()
                         }
+                        delay(150)
+                        controlReady = true
+                        startAkiControlLoop()
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {
+                }
+                if (generation == sessionGeneration.get()) {
+                    controlReady = false
+                    stopAkiControlLoop(clearIdentity = false)
                 }
                 if (!isActive) break
                 withContext(Dispatchers.Main) {
@@ -291,6 +347,152 @@ class ChatEngine @Inject constructor(
                 backoffMs = (backoffMs * 2).coerceAtMost(30_000L)
             }
         }
+    }
+
+    private fun decodeEnvelope(payload: String): TextEnvelope? {
+        val cipher = try {
+            Base64.decode(payload)
+        } catch (_: Exception) {
+            return null
+        }
+        val clear = try {
+            SecureMessageChannel.decrypt(cipher, settingsStore.magicString).decodeToString()
+        } catch (_: Exception) {
+            return null
+        }
+        return TextEnvelope.decode(clear)
+    }
+
+    private fun parseBoolean(value: String?): Boolean? = when (value?.lowercase()) {
+        "true", "1", "yes", "on" -> true
+        "false", "0", "no", "off" -> false
+        else -> null
+    }
+
+    private fun startAkiControlLoop() {
+        akiControlJob?.cancel()
+        lastProbeSentAt = 0L
+        akiControlJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val now = System.currentTimeMillis()
+                if (shouldExpireAki(akiPresent, lastAkiSeenAt, now, STATUS_TIMEOUT_MS)) {
+                    akiPresent = false
+                    withContext(Dispatchers.Main) {
+                        agentStatus = agentStatus.copy(
+                            present = false,
+                            lastSeenAt = lastAkiSeenAt,
+                        )
+                    }
+                }
+                if (shouldProbeAki(akiPresent, lastProbeSentAt, now, PROBE_RETRY_MS)) {
+                    publishAkiProbe()
+                }
+                delay(500L)
+            }
+        }
+    }
+
+    private fun stopAkiControlLoop(clearIdentity: Boolean) {
+        akiControlJob?.cancel()
+        akiControlJob = null
+        akiPresent = false
+        lastAkiSeenAt = 0L
+        lastProbeSentAt = 0L
+        if (clearIdentity) akiAgentId = null
+        val id = akiAgentId.orEmpty()
+        scope.launch(Dispatchers.Main) {
+            agentStatus = agentStatus.copy(
+                present = false,
+                lastSeenAt = 0L,
+                agentId = id,
+            )
+        }
+    }
+
+    private suspend fun publishAkiProbe() {
+        if (!mqttService.isConnected()) return
+        lastProbeSentAt = System.currentTimeMillis()
+        val probeId = UUID.randomUUID().toString()
+        val envelope = TextEnvelope(
+            sender = settingsStore.displayName,
+            text = "Aki probe",
+            senderId = settingsStore.deviceId,
+            avatarHash = ownAvatarHash(),
+            metadata = mapOf(
+                "schema" to "akid.v1",
+                "kind" to "probe",
+                "protocolVersion" to PROTOCOL_VERSION.toString(),
+                "probeId" to probeId,
+            ),
+        )
+        val payload = try {
+            Base64.encode(
+                SecureMessageChannel.encrypt(
+                    envelope.encode().encodeToByteArray(),
+                    settingsStore.magicString,
+                )
+            )
+        } catch (_: Exception) {
+            return
+        }
+        try {
+            mqttService.publish(CONTROL_TOPIC, payload)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun applyControlEnvelope(envelope: TextEnvelope) {
+        val meta = envelope.metadata
+        if (meta["schema"] != "akid.v1") return
+        val kind = meta["kind"].orEmpty()
+        if (kind != "presence" && kind != "status" && kind != "offline") return
+        if (meta["protocolVersion"]?.toIntOrNull() != PROTOCOL_VERSION) return
+        val senderId = envelope.senderId
+        if (senderId.isNotEmpty() && senderId == settingsStore.deviceId) return
+        val agent = meta["agent"].orEmpty()
+        val locked = akiAgentId
+        if (locked != null && senderId.isNotEmpty() && senderId != locked) return
+        if (locked == null) {
+            if (agent != "aki") return
+            if (senderId.isNotEmpty()) akiAgentId = senderId
+        }
+        val now = System.currentTimeMillis()
+        if (kind == "offline") {
+            akiPresent = false
+            agentStatus = agentStatus.copy(
+                present = false,
+                lastSeenAt = lastAkiSeenAt,
+                agentId = akiAgentId.orEmpty(),
+            )
+            return
+        }
+        if (kind == "presence" && agent != "aki") return
+        if (kind == "status" && agent.isNotEmpty() && agent != "aki") return
+
+        lastAkiSeenAt = now
+        akiPresent = true
+        val old = agentStatus
+        agentStatus = old.copy(
+            present = true,
+            lastSeenAt = now,
+            agentId = akiAgentId ?: old.agentId,
+            agentName = meta["agentName"].orEmpty().ifBlank {
+                old.agentName.ifBlank { "Aki" }
+            },
+            model = meta["model"] ?: old.model,
+            reasoning = meta["reasoning"] ?: old.reasoning,
+            contextLimit = meta["contextLimit"]?.toIntOrNull() ?: old.contextLimit,
+            contextTokens = meta["contextTokens"]?.toIntOrNull() ?: old.contextTokens,
+            backendReady = parseBoolean(meta["backendReady"]) ?: old.backendReady,
+            channelReady = parseBoolean(meta["channelReady"]) ?: old.channelReady,
+            sandboxReady = parseBoolean(meta["sandboxReady"]) ?: old.sandboxReady,
+            queueDepth = meta["queueDepth"]?.toIntOrNull() ?: old.queueDepth,
+            activeTurn = parseBoolean(meta["activeTurn"]) ?: old.activeTurn,
+            pendingApprovals = meta["pendingApprovals"]?.toIntOrNull()
+                ?: old.pendingApprovals,
+            uptimeS = meta["uptimeS"]?.toLongOrNull() ?: old.uptimeS,
+            memoryTokens = meta["memoryTokens"]?.toIntOrNull() ?: old.memoryTokens,
+        )
     }
 
     fun addMessage(content: String, isError: Boolean = false) {
@@ -325,8 +527,204 @@ class ChatEngine @Inject constructor(
         schedulePersist()
     }
 
+    private fun applyIncomingEnvelope(envelope: TextEnvelope) {
+        val meta = envelope.metadata
+        if (meta["schema"] != "akid.v1") {
+            addChatText(
+                envelope.text,
+                sender = envelope.sender,
+                senderId = envelope.senderId,
+                isMine = false,
+            )
+            return
+        }
+        val kind = meta["kind"].orEmpty()
+        val turnId = meta["turnId"].orEmpty()
+        val seq = meta["seq"]?.toIntOrNull() ?: 0
+        when (kind) {
+            "turn" -> applyAgentTurn(envelope, turnId, seq)
+            "tool" -> applyAgentTool(envelope, turnId, seq)
+            "approval" -> applyAgentApproval(envelope, turnId, seq)
+            "approval_resolved" -> applyAgentApprovalResolved(envelope, turnId, seq)
+            "error" -> applyAgentError(envelope, turnId, seq)
+        }
+    }
+
+    private fun applyAgentTurn(envelope: TextEnvelope, turnId: String, seq: Int) {
+        if (turnId.isEmpty()) return
+        val phase = envelope.metadata["phase"].orEmpty()
+        val segment = envelope.metadata["segment"]?.toIntOrNull() ?: 0
+        when (phase) {
+            "started" -> upsertAgent(
+                ChatMessage(
+                    id = "$turnId:status",
+                    content = "",
+                    pic = null,
+                    sender = envelope.sender,
+                    senderId = envelope.senderId,
+                    agentKind = "turn",
+                    turnId = turnId,
+                    segment = segment,
+                    seq = seq,
+                    phase = phase,
+                    status = "running",
+                )
+            )
+            "progress", "final" -> {
+                if (envelope.text.isBlank()) return
+                upsertAgent(
+                    ChatMessage(
+                        id = "$turnId:segment:$segment",
+                        content = envelope.text,
+                        pic = null,
+                        sender = envelope.sender,
+                        senderId = envelope.senderId,
+                        agentKind = "turn",
+                        turnId = turnId,
+                        segment = segment,
+                        seq = seq,
+                        phase = phase,
+                        markdown = true,
+                        status = if (phase == "final") "complete" else "running",
+                    )
+                )
+                if (phase == "final") schedulePersist()
+            }
+            "ended" -> {
+                messages.removeAll { it.id == "$turnId:status" }
+                for (index in messages.indices) {
+                    val message = messages[index]
+                    if (message.turnId != turnId || !message.isAgent) continue
+                    if (message.phase == "progress" || message.status == "running") {
+                        messages[index] = message.copy(phase = "completed", status = "complete")
+                    }
+                }
+                schedulePersist()
+            }
+            "no_reply" -> {
+                messages.removeAll { it.turnId == turnId }
+                schedulePersist()
+            }
+        }
+    }
+
+    private fun applyAgentTool(envelope: TextEnvelope, turnId: String, seq: Int) {
+        if (turnId.isEmpty()) return
+        val toolCallId = envelope.metadata["toolCallId"].orEmpty()
+        if (toolCallId.isEmpty()) return
+        val status = envelope.metadata["toolStatus"].orEmpty().ifBlank { "running" }
+        upsertAgent(
+            ChatMessage(
+                id = "$turnId:tool:$toolCallId",
+                content = envelope.text,
+                pic = null,
+                sender = envelope.sender,
+                senderId = envelope.senderId,
+                agentKind = "tool",
+                turnId = turnId,
+                seq = seq,
+                phase = if (status == "running") "running" else "completed",
+                toolCallId = toolCallId,
+                toolName = envelope.metadata["toolName"].orEmpty(),
+                status = status,
+            )
+        )
+        if (status != "running") schedulePersist()
+    }
+
+    private fun applyAgentApproval(envelope: TextEnvelope, turnId: String, seq: Int) {
+        val approvalId = envelope.metadata["approvalId"].orEmpty()
+        if (approvalId.isEmpty()) return
+        upsertAgent(
+            ChatMessage(
+                id = "approval:$approvalId",
+                content = envelope.text,
+                pic = null,
+                sender = envelope.sender,
+                senderId = envelope.senderId,
+                agentKind = "approval",
+                turnId = turnId,
+                seq = seq,
+                phase = "pending",
+                toolCallId = envelope.metadata["toolCallId"].orEmpty(),
+                toolName = envelope.metadata["toolName"].orEmpty(),
+                approvalId = approvalId,
+                requesterId = envelope.metadata["requesterId"].orEmpty(),
+                timeoutS = envelope.metadata["timeoutS"]?.toIntOrNull() ?: 0,
+                details = envelope.metadata["details"].orEmpty(),
+                status = "pending",
+            )
+        )
+    }
+
+    private fun applyAgentApprovalResolved(envelope: TextEnvelope, turnId: String, seq: Int) {
+        val approvalId = envelope.metadata["approvalId"].orEmpty()
+        if (approvalId.isEmpty()) return
+        val decision = envelope.metadata["decision"].orEmpty().ifBlank { "deny" }
+        val id = "approval:$approvalId"
+        val index = messages.indexOfFirst { it.id == id }
+        if (index < 0) {
+            upsertAgent(
+                ChatMessage(
+                    id = id,
+                    content = envelope.text,
+                    pic = null,
+                    sender = envelope.sender,
+                    senderId = envelope.senderId,
+                    agentKind = "approval",
+                    turnId = turnId,
+                    seq = seq,
+                    phase = "resolved",
+                    toolName = envelope.metadata["toolName"].orEmpty(),
+                    approvalId = approvalId,
+                    details = envelope.metadata["details"].orEmpty(),
+                    status = decision,
+                )
+            )
+        } else {
+            val existing = messages[index]
+            if (seq >= existing.seq) {
+                messages[index] = existing.copy(
+                    seq = seq,
+                    phase = "resolved",
+                    status = decision,
+                )
+            }
+        }
+        schedulePersist()
+    }
+
+    private fun applyAgentError(envelope: TextEnvelope, turnId: String, seq: Int) {
+        if (turnId.isEmpty()) return
+        upsertAgent(
+            ChatMessage(
+                id = "$turnId:error:$seq",
+                content = envelope.text,
+                pic = null,
+                isError = true,
+                sender = envelope.sender,
+                senderId = envelope.senderId,
+                agentKind = "error",
+                turnId = turnId,
+                seq = seq,
+                phase = "ended",
+                status = "error",
+            )
+        )
+        schedulePersist()
+    }
+
+    private fun upsertAgent(message: ChatMessage) {
+        val index = messages.indexOfFirst { it.id == message.id }
+        if (index < 0) {
+            messages.add(message)
+        } else if (message.seq >= messages[index].seq) {
+            messages[index] = message
+        }
+    }
+
     private fun emitNotice(message: ChatMessage) {
-        if (message.isMine || message.isSystem || message.isError) return
+        if (message.isMine || message.isSystem || message.isError || message.isAgent) return
         val preview = when {
             message.isFile -> message.fileName ?: "File"
             message.isImage -> "Photo"
@@ -393,6 +791,43 @@ class ChatEngine @Inject constructor(
 
     fun cancelOutgoing(transferId: String) {
         outgoingJobs[transferId]?.cancel()
+    }
+
+    fun respondToApproval(approvalId: String, allow: Boolean) {
+        if (!connected || approvalId.isEmpty()) return
+        val id = "approval:$approvalId"
+        val index = messages.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val message = messages[index]
+        if (message.requesterId.isNotEmpty() && message.requesterId != settingsStore.deviceId) return
+        if (message.status != "pending") return
+        val pendingStatus = if (allow) "allow_pending" else "deny_pending"
+        messages[index] = message.copy(status = pendingStatus)
+        val command = if (allow) "akid-approve $approvalId" else "akid-deny $approvalId"
+        val envelope = TextEnvelope(
+            sender = settingsStore.displayName,
+            text = command,
+            senderId = settingsStore.deviceId,
+            avatarHash = ownAvatarHash(),
+        ).encode()
+        val payload = Base64.encode(
+            SecureMessageChannel.encrypt(
+                envelope.encodeToByteArray(),
+                settingsStore.magicString,
+            )
+        )
+        scope.launch(Dispatchers.IO) {
+            try {
+                mqttService.publish("tokifactor/text", payload)
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) {
+                    val current = messages.indexOfFirst { it.id == id }
+                    if (current >= 0 && messages[current].status == pendingStatus) {
+                        messages[current] = messages[current].copy(status = "pending")
+                    }
+                }
+            }
+        }
     }
 
     fun sendMessage(content: String) {
@@ -776,7 +1211,19 @@ class ChatEngine @Inject constructor(
             fileSize = chunk.size,
             mismatchLabel = "image",
             isChunkedText = false,
+            caption = decryptPictureCaption(chunk.captionEncrypted),
         )
+    }
+
+    private fun decryptPictureCaption(encrypted: String): String {
+        if (encrypted.isBlank()) return ""
+        return try {
+            SecureMessageChannel.decrypt(Base64.decode(encrypted), settingsStore.magicString)
+                .decodeToString(throwOnInvalidSequence = false)
+                .take(2000)
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     private suspend fun handleIncomingFile(chunk: FileChunk) {
@@ -814,6 +1261,7 @@ class ChatEngine @Inject constructor(
             fileSize = chunk.size,
             mismatchLabel = "text",
             isChunkedText = true,
+            metadata = chunk.metadata,
         )
     }
 
@@ -832,6 +1280,8 @@ class ChatEngine @Inject constructor(
         fileSize: Long,
         mismatchLabel: String,
         isChunkedText: Boolean,
+        caption: String = "",
+        metadata: Map<String, String> = emptyMap(),
     ) {
         if (abort) {
             withContext(Dispatchers.Main) {
@@ -879,6 +1329,7 @@ class ChatEngine @Inject constructor(
                 fileName = fileName,
                 fileSize = fileSize,
                 isChunkedText = isChunkedText,
+                caption = caption,
             )
         }
         if (!complete) return
@@ -910,20 +1361,33 @@ class ChatEngine @Inject constructor(
                 val text = dest.readText()
                 ChunkedTransfer.deleteTransfer(transferId)
                 withContext(Dispatchers.Main) {
-                    updateMessage(transferId) {
-                        it.copy(
-                            content = text,
-                            pic = null,
-                            fileBytes = null,
-                            fileName = null,
-                            filePath = null,
-                            fileSize = size,
-                            chunksReceived = 0,
-                            chunksTotal = 0,
-                            isChunkedText = false,
+                    if (metadata["schema"] == "akid.v1") {
+                        messages.removeAll { it.id == transferId }
+                        applyIncomingEnvelope(
+                            TextEnvelope(
+                                sender = sender,
+                                text = text,
+                                senderId = senderId,
+                                avatarHash = avatarHash,
+                                metadata = metadata,
+                            )
                         )
+                    } else {
+                        updateMessage(transferId) {
+                            it.copy(
+                                content = text,
+                                pic = null,
+                                fileBytes = null,
+                                fileName = null,
+                                filePath = null,
+                                fileSize = size,
+                                chunksReceived = 0,
+                                chunksTotal = 0,
+                                isChunkedText = false,
+                            )
+                        }
+                        messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
                     }
-                    messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
                 }
                 return
             }
@@ -963,6 +1427,7 @@ class ChatEngine @Inject constructor(
         fileName: String?,
         fileSize: Long,
         isChunkedText: Boolean,
+        caption: String,
     ): Boolean {
         if (transferId in abortedTransfers) return false
         val existingMsg = messages.indexOfFirst { it.id == transferId }
@@ -987,7 +1452,11 @@ class ChatEngine @Inject constructor(
             fileSize = fileSize,
             received = BooleanArray(total),
             isChunkedText = isChunkedText,
+            caption = caption,
         ).also { incoming[transferId] = it }
+        if (caption.isNotBlank() && state.caption.isBlank()) {
+            state.caption = caption
+        }
 
         if (index < 0 || index >= state.received.size) return false
         val isNew = !state.received[index]
@@ -997,12 +1466,17 @@ class ChatEngine @Inject constructor(
         }
         bumpIncomingWatchdog(transferId)
         val displayName = state.fileName
+        val displayContent = if (!state.isChunkedText && displayName == null) {
+            state.caption
+        } else {
+            displayName ?: ""
+        }
 
         if (existingMsg < 0) {
             messages.add(
                 ChatMessage(
                     id = transferId,
-                    content = displayName ?: "",
+                    content = displayContent,
                     pic = null,
                     sender = state.sender,
                     senderId = state.senderId,
@@ -1015,7 +1489,9 @@ class ChatEngine @Inject constructor(
                 )
             )
         } else {
-            messages[existingMsg] = messages[existingMsg].copy(
+            val existing = messages[existingMsg]
+            messages[existingMsg] = existing.copy(
+                content = if (displayContent.isNotBlank()) displayContent else existing.content,
                 chunksReceived = state.count,
                 chunksTotal = total,
                 fileSize = state.fileSize,

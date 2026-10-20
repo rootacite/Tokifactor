@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -23,6 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,6 +35,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -48,8 +52,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.acite.tokifactor.OnSystemBack
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
@@ -74,6 +82,10 @@ fun SettingPage(
 
     var clearStep by remember { mutableStateOf(0) }
     var historyCleared by remember { mutableStateOf(false) }
+    val leave = {
+        if (viewModel.save()) onBack()
+    }
+    OnSystemBack(enabled = true) { leave() }
 
     val avatarPickerLauncher = rememberFilePickerLauncher(
         type = PickerType.Image
@@ -87,10 +99,7 @@ fun SettingPage(
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.save()
-                        onBack()
-                    }) {
+                    IconButton(onClick = leave) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
@@ -98,10 +107,7 @@ fun SettingPage(
                     }
                 },
                 actions = {
-                    TextButton(onClick = {
-                        viewModel.save()
-                        onBack()
-                    }) {
+                    TextButton(onClick = leave) {
                         Text("Save")
                     }
                 }
@@ -189,14 +195,7 @@ fun SettingPage(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            BrokerSelector(
-                brokers = viewModel.brokers,
-                selectedId = viewModel.selectedBrokerId,
-                probing = viewModel.probing,
-                probeById = viewModel.probeById,
-                onSelect = { viewModel.selectedBrokerId = it },
-                onTestAll = { viewModel.testAllBrokers() },
-            )
+            BrokerSelector(viewModel)
             HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Chat history", style = MaterialTheme.typography.titleSmall)
@@ -268,14 +267,11 @@ fun SettingPage(
 }
 
 @Composable
-private fun BrokerSelector(
-    brokers: List<MqttBroker>,
-    selectedId: String,
-    probing: Boolean,
-    probeById: Map<String, MqttBrokerProbe>,
-    onSelect: (String) -> Unit,
-    onTestAll: () -> Unit,
-) {
+private fun BrokerSelector(viewModel: SettingPageViewModel) {
+    val brokers = viewModel.brokers
+    val selectedId = viewModel.selectedBrokerId
+    val probing = viewModel.probing
+    val probeById = viewModel.probeById
     var showSlow by remember { mutableStateOf(false) }
     val folded = brokers.filter { broker ->
         broker.id != selectedId && (probeById[broker.id]?.isSlow() == true)
@@ -290,7 +286,7 @@ private fun BrokerSelector(
             Column(modifier = Modifier.weight(1f)) {
                 Text("MQTT broker", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "Same node on both devices. >${MqttBrokers.SLOW_MS} ms folds away.",
+                    text = "Custom address or a preset. Both devices must use the same broker. >${MqttBrokers.SLOW_MS} ms folds away.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -303,17 +299,18 @@ private fun BrokerSelector(
                     strokeWidth = 2.dp,
                 )
             }
-            TextButton(onClick = onTestAll, enabled = !probing) {
+            TextButton(onClick = { viewModel.testAllBrokers() }, enabled = !probing && !viewModel.customProbing) {
                 Text(if (probing) "Testing…" else "Test all")
             }
         }
+        CustomBrokerEditor(viewModel)
         visible.forEach { broker ->
             BrokerRow(
                 broker = broker,
                 selected = broker.id == selectedId,
                 probing = probing,
                 probe = probeById[broker.id],
-                onSelect = { onSelect(broker.id) },
+                onSelect = { viewModel.selectedBrokerId = broker.id },
             )
         }
         if (folded.isNotEmpty()) {
@@ -346,10 +343,153 @@ private fun BrokerSelector(
                             selected = false,
                             probing = probing,
                             probe = probeById[broker.id],
-                            onSelect = { onSelect(broker.id) },
+                            onSelect = { viewModel.selectedBrokerId = broker.id },
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CustomBrokerEditor(viewModel: SettingPageViewModel) {
+    val selected = viewModel.selectedBrokerId == MqttBrokers.CUSTOM_ID
+    val error = viewModel.customFormError
+    val parsed = MqttBrokers.parseCustom(
+        viewModel.customHost,
+        viewModel.customPort,
+        viewModel.customTls,
+        viewModel.customUsername,
+        viewModel.customPassword,
+    )
+    var showPassword by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(8.dp)
+    val background = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        Color.Transparent
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(background)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(36.dp)
+                .clip(shape)
+                .clickable(onClick = viewModel::selectCustom),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(end = 6.dp)
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .padding(vertical = 8.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
+                    )
+            )
+            Text(
+                text = parsed.broker?.let { "Custom  ${it.endpoint}" } ?: "Custom",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            QualityMark(
+                probing = viewModel.customProbing || viewModel.probing,
+                probe = viewModel.probeById[MqttBrokers.CUSTOM_ID],
+                modifier = Modifier.padding(end = 4.dp),
+            )
+        }
+        OutlinedTextField(
+            value = viewModel.customHost,
+            onValueChange = viewModel::onCustomHostChange,
+            label = { Text("Host") },
+            placeholder = { Text("broker.example.com") },
+            supportingText = {
+                val hostError = error?.takeUnless { it.startsWith("Port") }
+                Text(hostError ?: "Hostname, host:port, or mqtts://host:port")
+            },
+            isError = error != null && !error.startsWith("Port"),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = viewModel.customPort,
+                onValueChange = viewModel::onCustomPortChange,
+                label = { Text("Port") },
+                placeholder = { Text(if (viewModel.customTls) "8883" else "1883") },
+                isError = error?.startsWith("Port") == true,
+                supportingText = if (error?.startsWith("Port") == true) {
+                    { Text(error) }
+                } else {
+                    null
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.width(120.dp),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("TLS", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = viewModel.customTls,
+                    onCheckedChange = viewModel::onCustomTlsChange,
+                )
+            }
+        }
+        OutlinedTextField(
+            value = viewModel.customUsername,
+            onValueChange = viewModel::onCustomUsernameChange,
+            label = { Text("Username") },
+            supportingText = { Text("Optional. Leave blank for anonymous brokers.") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = viewModel.customPassword,
+            onValueChange = viewModel::onCustomPasswordChange,
+            label = { Text("Password") },
+            singleLine = true,
+            visualTransformation = if (showPassword) {
+                VisualTransformation.None
+            } else {
+                PasswordVisualTransformation()
+            },
+            trailingIcon = {
+                IconButton(onClick = { showPassword = !showPassword }) {
+                    Icon(
+                        imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        contentDescription = if (showPassword) "Hide password" else "Show password",
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = viewModel::testCustom,
+                enabled = viewModel.canTestCustom,
+            ) {
+                Text(if (viewModel.customProbing) "Testing…" else "Test")
             }
         }
     }

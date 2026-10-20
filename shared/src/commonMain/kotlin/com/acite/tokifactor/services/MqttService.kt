@@ -181,6 +181,14 @@ class MqttService @Inject constructor(
             .identifier(clientId)
             .serverHost(broker.host)
             .serverPort(broker.port)
+        if (broker.username.isNotEmpty()) {
+            val auth = builder.simpleAuth().username(broker.username)
+            builder = if (broker.password.isEmpty()) {
+                auth.applySimpleAuth()
+            } else {
+                auth.password(broker.password.toByteArray(StandardCharsets.UTF_8)).applySimpleAuth()
+            }
+        }
         if (autoReconnect) {
             builder = builder.automaticReconnectWithDefaultConfig()
                 .addConnectedListener { _connected.value = true }

@@ -111,7 +111,8 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
 
 - Broker default: `broker.hivemq.com:8883` with SSL.
 - MQTT v5, `noLocal(true)` on subscribe so the broker does not echo our own publishes.
-- Topics: `tokifactor/text`, `tokifactor/picture`.
+- Topics: `tokifactor/text`, `tokifactor/picture`, `tokifactor/file`,
+  `tokifactor/avatar`, and `tokifactor/control`.
 - Payloads on the wire: **Base64 of ciphertext** (UTF-8 string).
 - `subscribe()` returns `Flow<MqttMessage>` via `callbackFlow`.
 - `getMaximumPacketSize()` comes from CONNACK restrictions; send path rejects oversized payloads and shows an error card.
@@ -129,6 +130,19 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
 ### Models
 
 - `ChatMessage(id, content, pic: ByteArray?, isError)` — `pic != null` means image card; `isError` uses error container colors.
+- Agent events use the optional `agentKind/turnId/segment/seq/phase` fields on
+  `ChatMessage`; `ChatEngine` upserts them by stable id so progress updates edit the
+  same bubble instead of appending duplicates.
+- `MainPage` groups consecutive `agentKind == "tool"` and `"approval"` messages from
+  the same turn into one collapsed card; pending approvals force it open, and
+  selection/deletion operate on every message in the group.
+- Text envelopes may carry `akid.v1` metadata (`kind`, `turnId`, `phase`, approval and
+  tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
+  `status`, and `offline` messages for Aki discovery and must never enter chat
+  history or create turns. Keep the plain `text` field as the fallback for older clients.
+- `ChatEngine.agentStatus` is the single source of truth for the optional Aki header.
+  It times out after 30 seconds without a presence/status heartbeat and resumes
+  probing; `present == false` hides the Aki UI entirely.
 - `MqttMessage(topic, payload, timestamp)` — inbound MQTT only.
 
 ## Commands
@@ -187,5 +201,3 @@ Do not delete these in drive-by diffs. Do not extend Greeting as the app’s arc
 
 After Kotlin/Metro/graph changes, compile `:shared` before considering the work done.
 )
-
-## 
