@@ -1565,6 +1565,7 @@ private fun AgentToolGroupCard(
                         Text(
                             text = title,
                             style = MaterialTheme.typography.labelLarge,
+                            color = contentColor,
                         )
                         Text(
                             text = "$summary · $groupStatus",
@@ -1590,12 +1591,14 @@ private fun AgentToolGroupCard(
                             imageVector = Icons.Default.Close,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp),
+                            tint = colors.onErrorContainer,
                         )
                     } else {
                         Icon(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
                             modifier = Modifier.size(18.dp),
+                            tint = colors.textDim,
                         )
                     }
                     if (!requiresAction) {
@@ -1603,6 +1606,7 @@ private fun AgentToolGroupCard(
                             imageVector = if (effectiveExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                             contentDescription = if (effectiveExpanded) "Collapse tool calls" else "Expand tool calls",
                             modifier = Modifier.size(20.dp),
+                            tint = colors.textDim,
                         )
                     }
                 }
@@ -1687,6 +1691,7 @@ private fun AgentToolRow(
             Text(
                 text = message.toolName.ifBlank { "Tool" },
                 style = MaterialTheme.typography.labelLarge,
+                color = if (status == "error") colors.onErrorContainer else colors.text,
             )
             Text(
                 text = label,
@@ -1703,11 +1708,13 @@ private fun AgentToolRow(
                 imageVector = Icons.Default.Close,
                 contentDescription = null,
                 modifier = Modifier.size(17.dp),
+                tint = colors.onErrorContainer,
             )
             else -> Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
                 modifier = Modifier.size(17.dp),
+                tint = colors.textDim,
             )
         }
     }
