@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val appGraph = (application as TokiFactorApp).graph
         setContent {
-            App(appGraph.metroViewModelFactory)
+            App(appGraph.metroViewModelFactory, appGraph.settingsStore)
         }
         ensureBackgroundChat()
     }

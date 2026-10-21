@@ -19,8 +19,12 @@ class SettingsStore @Inject constructor() {
     companion object {
         const val DEFAULT_MAGIC_STRING = "TOKIFACTOR"
         const val MAX_AVATAR_BYTES = 4 * 1024 * 1024
+        const val DEFAULT_FONT_SCALE = 1f
+        const val MIN_FONT_SCALE = 0.8f
+        const val MAX_FONT_SCALE = 1.6f
         private const val KEY_MAGIC = "magicString"
         private const val KEY_DISPLAY_NAME = "displayName"
+        private const val KEY_FONT_SCALE = "fontScale"
         private const val KEY_MQTT_BROKER = "mqttBrokerId"
         private const val KEY_CUSTOM_HOST = "mqttCustomHost"
         private const val KEY_CUSTOM_PORT = "mqttCustomPort"
@@ -34,6 +38,9 @@ class SettingsStore @Inject constructor() {
         private set
 
     var displayName: String = defaultDisplayName()
+        private set
+
+    var fontScale: Float = DEFAULT_FONT_SCALE
         private set
 
     var mqttBrokerId: String = MqttBrokers.DEFAULT_ID
@@ -83,6 +90,10 @@ class SettingsStore @Inject constructor() {
         val parsed = if (file.exists()) parseToml(file.readText()) else emptyMap()
         magicString = parsed[KEY_MAGIC]?.ifBlank { null } ?: DEFAULT_MAGIC_STRING
         displayName = parsed[KEY_DISPLAY_NAME]?.ifBlank { null } ?: defaultDisplayName()
+        fontScale = parsed[KEY_FONT_SCALE]
+            ?.toFloatOrNull()
+            ?.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
+            ?: DEFAULT_FONT_SCALE
         mqttCustomHost = parsed[KEY_CUSTOM_HOST].orEmpty()
         mqttCustomPort = parsed[KEY_CUSTOM_PORT]?.takeIf { it.isNotBlank() } ?: "8883"
         mqttCustomTls = !parsed[KEY_CUSTOM_TLS].equals("false", ignoreCase = true)
@@ -116,6 +127,11 @@ class SettingsStore @Inject constructor() {
 
     fun updateDisplayName(value: String) {
         displayName = value.ifBlank { defaultDisplayName() }
+        persist()
+    }
+
+    fun updateFontScale(value: Float) {
+        fontScale = value.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
         persist()
     }
 
@@ -230,6 +246,7 @@ class SettingsStore @Inject constructor() {
         file.writeText(
             "$KEY_MAGIC = \"${escapeTomlString(magicString)}\"\n" +
                 "$KEY_DISPLAY_NAME = \"${escapeTomlString(displayName)}\"\n" +
+                "$KEY_FONT_SCALE = \"${fontScale}\"\n" +
                 "$KEY_MQTT_BROKER = \"${escapeTomlString(mqttBrokerId)}\"\n" +
                 "$KEY_CUSTOM_HOST = \"${escapeTomlString(mqttCustomHost)}\"\n" +
                 "$KEY_CUSTOM_PORT = \"${escapeTomlString(mqttCustomPort)}\"\n" +

@@ -2,10 +2,14 @@ package com.acite.tokifactor.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.TextUnit
 
 private val LightColorScheme = lightColorScheme(
     primary = TealPrimaryLight,
@@ -88,15 +92,47 @@ private val DarkColorScheme = darkColorScheme(
 @Composable
 fun TokiFactorTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    fontScale: Float = 1f,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val typography = remember(fontScale) { Typography().scaledBy(fontScale) }
     ApplySystemBars(darkTheme)
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = typography,
         content = content,
     )
 }
+
+private fun Typography.scaledBy(scale: Float): Typography {
+    if (scale == 1f) return this
+    return Typography(
+        displayLarge = displayLarge.scaledBy(scale),
+        displayMedium = displayMedium.scaledBy(scale),
+        displaySmall = displaySmall.scaledBy(scale),
+        headlineLarge = headlineLarge.scaledBy(scale),
+        headlineMedium = headlineMedium.scaledBy(scale),
+        headlineSmall = headlineSmall.scaledBy(scale),
+        titleLarge = titleLarge.scaledBy(scale),
+        titleMedium = titleMedium.scaledBy(scale),
+        titleSmall = titleSmall.scaledBy(scale),
+        bodyLarge = bodyLarge.scaledBy(scale),
+        bodyMedium = bodyMedium.scaledBy(scale),
+        bodySmall = bodySmall.scaledBy(scale),
+        labelLarge = labelLarge.scaledBy(scale),
+        labelMedium = labelMedium.scaledBy(scale),
+        labelSmall = labelSmall.scaledBy(scale),
+    )
+}
+
+private fun TextStyle.scaledBy(scale: Float): TextStyle = copy(
+    fontSize = fontSize.scaledBy(scale),
+    lineHeight = lineHeight.scaledBy(scale),
+)
+
+private fun TextUnit.scaledBy(scale: Float): TextUnit =
+    if (this == TextUnit.Unspecified) this else this * scale
 
 @Composable
 internal expect fun ApplySystemBars(darkTheme: Boolean)

@@ -23,6 +23,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.acite.tokifactor.pages.MainPage
 import com.acite.tokifactor.pages.SettingPage
+import com.acite.tokifactor.services.SettingsStore
 import com.acite.tokifactor.ui.theme.TokiFactorTheme
 import dev.zacsweers.metrox.viewmodel.LocalMetroViewModelFactory
 import dev.zacsweers.metrox.viewmodel.MetroViewModelFactory
@@ -36,9 +37,11 @@ private const val ROUTE_SETTINGS = "settings"
 
 @Composable
 fun App(
-    metroVmf: MetroViewModelFactory
+    metroVmf: MetroViewModelFactory,
+    settingsStore: SettingsStore,
 ) {
-    TokiFactorTheme {
+    var fontScale by remember { mutableFloatStateOf(settingsStore.fontScale) }
+    TokiFactorTheme(fontScale = fontScale) {
         Surface(
             modifier = Modifier.fillMaxSize(),
             color = MaterialTheme.colorScheme.background,
@@ -84,7 +87,11 @@ fun App(
                     }
                     composable(ROUTE_SETTINGS) {
                         SettingPage(
-                            onBack = { navController.popBackStack() }
+                            onBack = {
+                                fontScale = settingsStore.fontScale
+                                navController.popBackStack()
+                            },
+                            onFontScaleChange = { fontScale = it },
                         )
                     }
                 }

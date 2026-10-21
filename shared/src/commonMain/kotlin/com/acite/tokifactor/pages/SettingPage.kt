@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,6 +36,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,11 +68,13 @@ import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.core.PickerType
 import io.github.vinceglb.filekit.core.PlatformFile
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingPage(
     onBack: () -> Unit,
+    onFontScaleChange: (Float) -> Unit,
     viewModel: SettingPageViewModel = metroViewModel(),
 ) {
     LaunchedEffect(Unit) {
@@ -176,6 +180,13 @@ fun SettingPage(
                     color = MaterialTheme.colorScheme.error
                 )
             }
+            FontSizeSetting(
+                fontScale = viewModel.fontScale,
+                onFontScaleChange = { value ->
+                    viewModel.fontScale = value
+                    onFontScaleChange(value)
+                },
+            )
             OutlinedTextField(
                 value = viewModel.displayName,
                 onValueChange = { viewModel.displayName = it },
@@ -263,6 +274,62 @@ fun SettingPage(
                 }
             },
         )
+    }
+}
+
+@Composable
+private fun FontSizeSetting(
+    fontScale: Float,
+    onFontScaleChange: (Float) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Text size", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Scales chat, controls, and settings on this device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = "${(fontScale * 100).roundToInt()}%",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Slider(
+            value = fontScale,
+            onValueChange = { value ->
+                onFontScaleChange((value * 20).roundToInt() / 20f)
+            },
+            valueRange = SettingsStore.MIN_FONT_SCALE..SettingsStore.MAX_FONT_SCALE,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Smaller",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            if (fontScale != SettingsStore.DEFAULT_FONT_SCALE) {
+                TextButton(onClick = { onFontScaleChange(SettingsStore.DEFAULT_FONT_SCALE) }) {
+                    Text("Reset")
+                }
+            }
+            Text(
+                text = "Larger",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

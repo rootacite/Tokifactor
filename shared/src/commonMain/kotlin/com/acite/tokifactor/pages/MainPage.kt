@@ -86,7 +86,6 @@ import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
 import com.acite.tokifactor.model.queueBadgeLabel
-import com.acite.tokifactor.model.statusLabel
 import com.mikepenz.markdown.m3.Markdown
 import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
@@ -171,6 +170,14 @@ private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplay
     var index = 0
     while (index < messages.size) {
         val message = messages[index]
+        if (message.isAgent &&
+            message.agentKind == "turn" &&
+            message.phase == "started" &&
+            message.content.isBlank()
+        ) {
+            index += 1
+            continue
+        }
         if (!message.isGroupableToolStep()) {
             items += ChatDisplayItem.Single(message)
             index += 1
@@ -677,6 +684,9 @@ private fun AkiStatusBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
+                if (status.activeTurn) {
+                    WorkingPill()
+                }
                 val model = status.modelLabel()
                 if (model.isNotBlank()) {
                     StatusPill(
@@ -781,11 +791,45 @@ private fun MemberChip(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 110.dp),
             )
-            Box(
-                modifier = Modifier
-                    .size(6.dp)
-                    .clip(CircleShape)
-                    .background(memberDotColor(member)),
+            if (member.activeTurn) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(10.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(memberDotColor(member)),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkingPill() {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(9.dp),
+                strokeWidth = 1.5.dp,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+            Text(
+                text = "Working…",
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
             )
         }
     }
@@ -1341,45 +1385,11 @@ private fun SystemChip(
 }
 
 @Composable
-private fun AgentStatusChip() {
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.82f),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-                Text(
-                    text = "Aki is working…",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                )
-            }
-        }
-    }
-}
-
-@Composable
 private fun AgentTextBubble(
     message: ChatMessage,
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
 ) {
-    if (message.phase == "started" && message.content.isBlank()) {
-        AgentStatusChip()
-        return
-    }
     ChatRow(
         isMine = false,
         sender = message.sender,
@@ -1398,23 +1408,6 @@ private fun AgentTextBubble(
                         content = message.content,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                }
-                if (message.phase == "progress") {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Text(
-                            text = "Still working…",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
             }
         }

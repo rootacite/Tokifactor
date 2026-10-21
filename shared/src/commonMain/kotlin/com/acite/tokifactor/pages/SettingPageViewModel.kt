@@ -1,6 +1,7 @@
 package com.acite.tokifactor.pages
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -38,6 +39,8 @@ class SettingPageViewModel(
     var magicString by mutableStateOf(settingsStore.magicString)
 
     var displayName by mutableStateOf(settingsStore.displayName)
+
+    var fontScale by mutableFloatStateOf(settingsStore.fontScale)
 
     var selectedBrokerId by mutableStateOf(settingsStore.mqttBrokerId)
 
@@ -85,6 +88,7 @@ class SettingPageViewModel(
     fun reload() {
         magicString = settingsStore.magicString
         displayName = settingsStore.displayName
+        fontScale = settingsStore.fontScale
         selectedBrokerId = settingsStore.mqttBrokerId
         customHost = settingsStore.mqttCustomHost
         customPort = settingsStore.mqttCustomPort
@@ -220,6 +224,7 @@ class SettingPageViewModel(
     fun save(): Boolean {
         settingsStore.updateMagicString(magicString)
         settingsStore.updateDisplayName(displayName)
+        settingsStore.updateFontScale(fontScale)
         settingsStore.updateAvatar(avatarBytes)
         val parsed = currentParse()
         if (selectedBrokerId == MqttBrokers.CUSTOM_ID &&

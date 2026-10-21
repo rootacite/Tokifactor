@@ -40,8 +40,9 @@ The channel exists for as long as clients stay connected. There is nothing to de
   same broker and magic string appear in a compact, horizontally scrollable member
   bar with avatars and status dots. The second line shows the selected member's
   model, reasoning effort, context usage, queue depth, and pending approvals.
-  Selecting a member also exposes its description. Without agents, the app stays a
-  normal tokifactor chat client.
+  Active work is shown in the member bar instead of the message list, and selecting
+  a member also exposes its description. Without agents, the app stays a normal
+  tokifactor chat client.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
 - Consecutive tool cards and approvals from the same turn collapse into one expandable
@@ -50,7 +51,8 @@ The channel exists for as long as clients stay connected. There is nothing to de
 - **Display name** and **avatar** (shown next to your bubbles on the other device).
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
 - Light and dark **Material 3** theme that follows the system appearance.
-- Settings persist locally (magic string, name, broker, device id, avatar). Chat history is **in memory** and gone when the process dies.
+- Settings persist locally (magic string, name, broker, device id, avatar, and text
+  size). Chat history is **in memory** and gone when the process dies.
 
 There is no iOS, Wasm, or native-mobile target. There is no backend, no user directory, and no tests yet.
 
@@ -123,7 +125,7 @@ Each install gets a random `deviceId`. Display name defaults to the OS device na
 2. Open **Settings** (gear on the chat bar).
 3. Set a **magic string** that is *not* the default, and share it out of band (in person, another messenger, etc.). Both sides must match **exactly**.
 4. Pick the same **MQTT broker**. Prefer TLS. Use the latency marks if one region is unreachable.
-5. Optionally set a display name and avatar.
+5. Optionally set a display name, avatar, and text size.
 6. Wait until the send and attach buttons enable (connected). Then type, or attach a photo / file.
 
 If one or more Aki gateways are listening on the same broker and magic string,

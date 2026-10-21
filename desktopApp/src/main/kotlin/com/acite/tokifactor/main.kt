@@ -18,7 +18,7 @@ fun main() {
             icon = painterResource("icon.png"),
             state = rememberWindowState(size = DpSize(450.dp, 800.dp))
         ) {
-            App(appGraph.metroViewModelFactory)
+            App(appGraph.metroViewModelFactory, appGraph.settingsStore)
         }
     }
 }
