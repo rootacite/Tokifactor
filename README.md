@@ -117,7 +117,7 @@ Images over 8 MiB are shown with the file bubble instead of an in-chat preview.
 
 ### Identity
 
-Each install gets a random `deviceId`. Display name defaults to the OS device name. Avatars are encrypted on `tokifactor/avatar` and cached per sender id on the receiver.
+Each install gets a random `deviceId`. Display name defaults to the OS device name. Avatars are encrypted on `tokifactor/avatar` and cached per sender id on the receiver. On startup the client re-announces its own avatar and requests the current avatar for every cached peer and discovered channel member, so a peer avatar changed while the app was offline is refreshed.
 
 ## How to use
 

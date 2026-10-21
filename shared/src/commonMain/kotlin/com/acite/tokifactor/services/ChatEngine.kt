@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.io.encoding.Base64
@@ -99,6 +100,7 @@ class ChatEngine @Inject constructor(
     val peerAvatars = mutableStateMapOf<String, ByteArray>()
     private val peerAvatarHash = mutableMapOf<String, String>()
     private val pendingWantAt = mutableMapOf<String, Long>()
+    private val avatarRefreshRequested = ConcurrentHashMap.newKeySet<String>()
     private var lastPublishedAvatarHash: String? = null
 
 
@@ -190,6 +192,7 @@ class ChatEngine @Inject constructor(
     private fun startMqttSession() {
         val generation = sessionGeneration.incrementAndGet()
         sessionChannelKey = channelKey()
+        avatarRefreshRequested.clear()
         mqttSessionJob?.cancel()
         controlReady = false
         stopAkiControlLoop(clearIdentity = true)
@@ -337,7 +340,7 @@ class ChatEngine @Inject constructor(
                 }
                         launch {
                             publishAvatarHave(force = true)
-                            requestMissingPeerAvatars()
+                            requestKnownPeerAvatars()
                         }
                         delay(150)
                         controlReady = true
@@ -467,10 +470,12 @@ class ChatEngine @Inject constructor(
         if (agentId.isBlank() || agentId == settingsStore.deviceId) return
         if (kind == "offline") {
             memberStates.remove(agentId)
+            avatarRefreshRequested.remove(agentId)
             if (selectedAgentId == agentId) selectedAgentId = null
             return
         }
         val now = System.currentTimeMillis()
+        val firstSeen = memberStates[agentId] == null
         val old = memberStates[agentId] ?: AgentStatus(agentId = agentId)
         memberStates[agentId] = old.copy(
             present = true,
@@ -497,6 +502,9 @@ class ChatEngine @Inject constructor(
         )
         if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
             selectedAgentId = null
+        }
+        if (firstSeen) {
+            schedulePeerAvatarRefresh(agentId)
         }
     }
 
@@ -1593,16 +1601,27 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private suspend fun requestMissingPeerAvatars() {
-        val missing = withContext(Dispatchers.Main.immediate) {
-            messages
-                .map { it.senderId }
-                .filter { it.isNotEmpty() && it != settingsStore.deviceId && peerAvatars[it] == null }
-                .distinct()
+    private suspend fun requestKnownPeerAvatars() {
+        val ids = withContext(Dispatchers.Main.immediate) {
+            buildSet {
+                messages.mapTo(this) { it.senderId }
+                addAll(peerAvatars.keys)
+                addAll(memberStates.keys)
+            }.filter { it.isNotEmpty() && it != settingsStore.deviceId }
         }
-        for (id in missing) {
+        for (id in ids) {
+            avatarRefreshRequested.add(id)
             val hash = withContext(Dispatchers.Main.immediate) { peerAvatarHash[id] ?: "" }
             publishAvatarWant(id, hash)
+        }
+    }
+
+    private fun schedulePeerAvatarRefresh(agentId: String) {
+        if (agentId.isEmpty() || agentId == settingsStore.deviceId) return
+        if (!avatarRefreshRequested.add(agentId)) return
+        val hash = peerAvatarHash[agentId] ?: ""
+        scope.launch(Dispatchers.IO) {
+            publishAvatarWant(agentId, hash)
         }
     }
 
