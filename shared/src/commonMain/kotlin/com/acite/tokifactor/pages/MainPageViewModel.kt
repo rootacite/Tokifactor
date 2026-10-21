@@ -25,6 +25,10 @@ class MainPageViewModel(
 
     val agentStatus get() = chatEngine.agentStatus
 
+    val members get() = chatEngine.members
+
+    val selectedAgentId get() = chatEngine.selectedAgentId
+
     val deviceId get() = chatEngine.deviceId
 
     val peerAvatars get() = chatEngine.peerAvatars
@@ -34,6 +38,8 @@ class MainPageViewModel(
     }
 
     fun refreshSettings() = chatEngine.refreshSettings()
+
+    fun selectAgent(agentId: String) = chatEngine.selectAgent(agentId)
 
     fun addMessage(content: String, isError: Boolean = false) =
         chatEngine.addMessage(content, isError)

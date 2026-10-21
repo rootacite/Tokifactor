@@ -5,6 +5,8 @@ data class AgentStatus(
     val lastSeenAt: Long = 0L,
     val agentId: String = "",
     val agentName: String = "",
+    val description: String = "",
+    val aliases: String = "",
     val model: String = "",
     val reasoning: String = "",
     val contextLimit: Int = 0,
@@ -32,7 +34,28 @@ fun AgentStatus.statusLabel(): String = when {
     else -> "Online"
 }
 
-fun AgentStatus.modelLabel(): String = model.removePrefix("aki/")
+private val providerPrefix = Regex("^aki(?:-[a-z0-9_-]{1,32})?/")
+
+fun AgentStatus.modelLabel(): String = model.replace(providerPrefix, "")
+
+fun AgentStatus.aliasList(): List<String> =
+    aliases.split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+fun preferredMember(members: Collection<AgentStatus>): AgentStatus? {
+    val online = members.filter { it.present }
+    return online.firstOrNull { it.agentId == "aki" || it.agentName.equals("Aki", ignoreCase = true) }
+        ?: online.firstOrNull()
+}
+
+fun selectedMember(
+    members: Collection<AgentStatus>,
+    selectedAgentId: String?,
+): AgentStatus? {
+    val online = members.filter { it.present }
+    return online.firstOrNull { it.agentId == selectedAgentId } ?: preferredMember(online)
+}
 
 fun AgentStatus.queueBadgeLabel(): String? =
     if (queueDepth > 0) "Queue $queueDepth" else null

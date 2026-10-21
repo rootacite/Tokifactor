@@ -140,9 +140,11 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
   `status`, and `offline` messages for Aki discovery and must never enter chat
   history or create turns. Keep the plain `text` field as the fallback for older clients.
-- `ChatEngine.agentStatus` is the single source of truth for the optional Aki header.
-  It times out after 30 seconds without a presence/status heartbeat and resumes
-  probing; `present == false` hides the Aki UI entirely.
+- `ChatEngine.memberStates` is keyed by `agentId` and is the single source of truth
+  for the optional member bar. Members time out after 30 seconds without a
+  presence/status heartbeat; with no members the UI hides. Probe cadence is 15s when
+  empty and 60s when members are present. The selected member falls back to the next
+  online member, preferring the first `Aki`.
 - `MqttMessage(topic, payload, timestamp)` — inbound MQTT only.
 
 ## Commands

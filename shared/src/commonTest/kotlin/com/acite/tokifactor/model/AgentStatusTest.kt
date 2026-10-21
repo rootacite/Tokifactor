@@ -33,10 +33,30 @@ class AgentStatusTest {
             pendingApprovals = 2,
         )
         assertEquals("deepseek-flash", status.modelLabel())
+        assertEquals("deepseek-flash", status.copy(model = "aki-fuyu/deepseek-flash").modelLabel())
         assertEquals("Queue 3", status.queueBadgeLabel())
         assertEquals("Approval 2", status.approvalBadgeLabel())
         assertNull(status.copy(queueDepth = 0).queueBadgeLabel())
         assertNull(status.copy(pendingApprovals = 0).approvalBadgeLabel())
+    }
+
+    @Test
+    fun memberSelectionPrefersFirstAkiThenFallsBackToNextOnline() {
+        val fuyu = AgentStatus(present = true, agentId = "fuyu", agentName = "Fuyu")
+        val aki = AgentStatus(present = true, agentId = "aki", agentName = "Aki")
+        val offline = AgentStatus(present = false, agentId = "haru", agentName = "Haru")
+        assertEquals("aki", preferredMember(listOf(fuyu, aki, offline))?.agentId)
+        assertEquals("fuyu", selectedMember(listOf(fuyu, aki), "fuyu")?.agentId)
+        assertEquals("fuyu", selectedMember(listOf(fuyu, offline), "aki")?.agentId)
+        assertEquals("fuyu", selectedMember(listOf(fuyu, offline), "haru")?.agentId)
+    }
+
+    @Test
+    fun aliasesAreParsedForMemberInfo() {
+        assertEquals(
+            listOf("Aki", "秋", "小秋"),
+            AgentStatus(aliases = "Aki, 秋, 小秋").aliasList(),
+        )
     }
 
     @Test
@@ -68,7 +88,10 @@ class AgentStatusTest {
             "schema" to "akid.v1",
             "kind" to "status",
             "agent" to "aki",
+            "agentId" to "aki",
             "agentName" to "Aki",
+            "description" to "test description",
+            "aliases" to "Aki,秋",
             "model" to "aki/deepseek-flash",
             "reasoning" to "high",
             "protocolVersion" to "1",

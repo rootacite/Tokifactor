@@ -22,6 +22,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -80,6 +82,7 @@ import coil3.request.crossfade
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
 import com.acite.tokifactor.model.queueBadgeLabel
@@ -205,6 +208,8 @@ fun MainPage(
     val selectedIds = remember { mutableStateListOf<String>() }
     var confirmDelete by remember { mutableStateOf(false) }
     var lastCount by remember { mutableIntStateOf(-1) }
+    var memberInfo by remember { mutableStateOf<AgentStatus?>(null) }
+    val members = viewModel.members
     val agentStatus = viewModel.agentStatus
 
     val imagePickerLauncher = rememberFilePickerLauncher(
@@ -299,7 +304,7 @@ fun MainPage(
     val listTopPad by animateDpAsState(
         targetValue = when {
             selectionMode -> 56.dp
-            agentStatus.present -> 96.dp
+            members.isNotEmpty() -> 118.dp
             else -> 16.dp
         },
         animationSpec = tween(220),
@@ -458,14 +463,17 @@ fun MainPage(
         }
 
         AnimatedVisibility(
-            visible = agentStatus.present && !selectionMode,
+            visible = members.isNotEmpty() && !selectionMode,
             enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
             exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
             AkiStatusBar(
                 status = agentStatus,
-                avatar = viewModel.peerAvatars[agentStatus.agentId],
+                members = members,
+                avatars = viewModel.peerAvatars,
+                onSelect = viewModel::selectAgent,
+                onShowInfo = { memberInfo = it },
             )
         }
 
@@ -579,6 +587,28 @@ fun MainPage(
             },
         )
     }
+
+    memberInfo?.let { member ->
+        AlertDialog(
+            onDismissRequest = { memberInfo = null },
+            title = { Text(member.agentName.ifBlank { member.agentId }) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("ID: ${member.agentId}", style = MaterialTheme.typography.labelMedium)
+                    if (member.aliases.isNotBlank()) {
+                        Text("Aliases: ${member.aliasList().joinToString(", ")}")
+                    }
+                    Text(
+                        if (member.description.isBlank()) "No description." else member.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { memberInfo = null }) { Text("Close") }
+            },
+        )
+    }
 }
 
 private enum class MenuAction { File, Photo, Settings }
@@ -588,16 +618,11 @@ private enum class ComposerDragLock { None, Send, Menu, Ignore }
 @Composable
 private fun AkiStatusBar(
     status: AgentStatus,
-    avatar: ByteArray?,
+    members: List<AgentStatus>,
+    avatars: Map<String, ByteArray>,
+    onSelect: (String) -> Unit,
+    onShowInfo: (AgentStatus) -> Unit,
 ) {
-    val attention = status.pendingApprovals > 0
-    val working = status.activeTurn || status.queueDepth > 0
-    val dotColor = when {
-        attention -> MaterialTheme.colorScheme.error
-        working -> MaterialTheme.colorScheme.primary
-        !status.backendReady -> MaterialTheme.colorScheme.error
-        else -> Color(0xFF4CAF50)
-    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         tonalElevation = 3.dp,
@@ -606,58 +631,46 @@ private fun AkiStatusBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 7.dp),
+                .padding(horizontal = 8.dp, vertical = 7.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             Row(
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                if (avatar != null) {
-                    ByteImage(
-                        imageBytes = avatar,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(27.dp)
-                            .clip(CircleShape),
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(27.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(17.dp),
+                Text(
+                    text = "${members.size} online",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(items = members, key = { it.agentId }) { member ->
+                        MemberChip(
+                            member = member,
+                            avatar = avatars[member.agentId],
+                            selected = member.agentId == status.agentId,
+                            onClick = { onSelect(member.agentId) },
                         )
                     }
                 }
-                Text(
-                    text = status.agentName.ifBlank { "Aki" },
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(dotColor),
-                )
-                Text(
-                    text = status.statusLabel(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 150.dp),
-                )
+                if (status.agentId.isNotBlank()) {
+                    IconButton(
+                        onClick = { onShowInfo(status) },
+                        enabled = status.description.isNotBlank(),
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = "Member info",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -709,6 +722,84 @@ private fun AkiStatusBar(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MemberChip(
+    member: AgentStatus,
+    avatar: ByteArray?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        },
+        contentColor = if (selected) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+        ) {
+            if (avatar != null) {
+                ByteImage(
+                    imageBytes = avatar,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape),
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primaryContainer),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
+            Text(
+                text = member.agentName.ifBlank { member.agentId },
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 110.dp),
+            )
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(memberDotColor(member)),
+            )
+        }
+    }
+}
+
+@Composable
+private fun memberDotColor(member: AgentStatus): Color {
+    val attention = member.pendingApprovals > 0
+    val working = member.activeTurn || member.queueDepth > 0
+    return when {
+        attention -> MaterialTheme.colorScheme.error
+        working -> MaterialTheme.colorScheme.primary
+        !member.backendReady -> MaterialTheme.colorScheme.error
+        else -> Color(0xFF4CAF50)
     }
 }
 

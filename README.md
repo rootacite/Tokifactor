@@ -36,10 +36,12 @@ The channel exists for as long as clients stay connected. There is nothing to de
 ## Features
 
 - Encrypted **text** chat in a Line/WeChat-style bubble list.
-- **Aki-aware status bar:** when an Aki agent answers the encrypted control probe on
-  the same broker and magic string, a compact two-line header shows its model,
-  reasoning effort, context usage, queue depth, and pending approvals. Without Aki,
-  the app stays a normal tokifactor chat client.
+- **Multi-agent member bar:** agents answering the encrypted control probe on the
+  same broker and magic string appear in a compact, horizontally scrollable member
+  bar with avatars and status dots. The second line shows the selected member's
+  model, reasoning effort, context usage, queue depth, and pending approvals.
+  Selecting a member also exposes its description. Without agents, the app stays a
+  normal tokifactor chat client.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
 - Consecutive tool cards and approvals from the same turn collapse into one expandable
@@ -124,10 +126,13 @@ Each install gets a random `deviceId`. Display name defaults to the OS device na
 5. Optionally set a display name and avatar.
 6. Wait until the send and attach buttons enable (connected). Then type, or attach a photo / file.
 
-If an Aki gateway is listening on the same broker and magic string, tokifactor
-probes `tokifactor/control` and shows the Aki status bar only after a valid
-presence or status message. Configure the broker and magic manually; tokifactor
-does not ship an Aki-specific broker preset.
+If one or more Aki gateways are listening on the same broker and magic string,
+tokifactor probes `tokifactor/control` every 15 seconds while empty and every 60
+seconds once members are present. Members are keyed by `agentId`, time out after
+30 seconds without a heartbeat, and are shown in the top member bar. The default
+selection prefers the first `Aki` and falls back to the next online member when it
+goes offline. Configure the broker and magic manually; tokifactor does not ship an
+Aki-specific broker preset.
 
 Peers who use a different magic string will not decrypt your traffic (and you will not see theirs). Peers who use a different broker are on a different bus.
 

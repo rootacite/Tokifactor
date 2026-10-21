@@ -14,8 +14,8 @@ import com.acite.tokifactor.model.InboundNotice
 import com.acite.tokifactor.model.PictureChunk
 import com.acite.tokifactor.model.TextChunk
 import com.acite.tokifactor.model.TextEnvelope
+import com.acite.tokifactor.model.selectedMember
 import com.acite.tokifactor.model.shouldExpireAki
-import com.acite.tokifactor.model.shouldProbeAki
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
@@ -52,7 +52,8 @@ class ChatEngine @Inject constructor(
     companion object {
         private const val CONTROL_TOPIC = "tokifactor/control"
         private const val STATUS_TIMEOUT_MS = 30_000L
-        private const val PROBE_RETRY_MS = 15_000L
+        private const val IDLE_PROBE_MS = 15_000L
+        private const val ROSTER_PROBE_MS = 60_000L
         private const val PROTOCOL_VERSION = 1
     }
 
@@ -69,8 +70,22 @@ class ChatEngine @Inject constructor(
     var connected by mutableStateOf(false)
         private set
 
-    var agentStatus by mutableStateOf(AgentStatus())
+    private val memberStates = mutableStateMapOf<String, AgentStatus>()
+
+    var selectedAgentId by mutableStateOf<String?>(null)
         private set
+
+    val members: List<AgentStatus>
+        get() = memberStates.values
+            .filter { it.present }
+            .sortedWith(compareBy<AgentStatus>({ it.agentId != "aki" }, { it.agentName.lowercase() }, { it.agentId }))
+
+    val agentStatus: AgentStatus
+        get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
+
+    fun selectAgent(agentId: String) {
+        if (agentId.isNotBlank()) selectedAgentId = agentId
+    }
 
     val deviceId: String
         get() = settingsStore.deviceId
@@ -111,9 +126,6 @@ class ChatEngine @Inject constructor(
     private val sessionGeneration = AtomicInteger(0)
     private var akiControlJob: Job? = null
     @Volatile private var controlReady = false
-    private var akiAgentId: String? = null
-    @Volatile private var akiPresent = false
-    @Volatile private var lastAkiSeenAt = 0L
     @Volatile private var lastProbeSentAt = 0L
     private var persistJob: Job? = null
     private val persistGeneration = AtomicInteger(0)
@@ -375,16 +387,23 @@ class ChatEngine @Inject constructor(
         akiControlJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val now = System.currentTimeMillis()
-                if (shouldExpireAki(akiPresent, lastAkiSeenAt, now, STATUS_TIMEOUT_MS)) {
-                    akiPresent = false
+                val expired = memberStates.filterValues {
+                    shouldExpireAki(it.present, it.lastSeenAt, now, STATUS_TIMEOUT_MS)
+                }
+                if (expired.isNotEmpty()) {
                     withContext(Dispatchers.Main) {
-                        agentStatus = agentStatus.copy(
-                            present = false,
-                            lastSeenAt = lastAkiSeenAt,
-                        )
+                        for (id in expired.keys) {
+                            val current = memberStates[id] ?: continue
+                            memberStates[id] = current.copy(present = false)
+                        }
+                        if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
+                            selectedAgentId = null
+                        }
                     }
                 }
-                if (shouldProbeAki(akiPresent, lastProbeSentAt, now, PROBE_RETRY_MS)) {
+                val hasMembers = memberStates.values.any { it.present }
+                val interval = if (hasMembers) ROSTER_PROBE_MS else IDLE_PROBE_MS
+                if (now - lastProbeSentAt >= interval) {
                     publishAkiProbe()
                 }
                 delay(500L)
@@ -395,17 +414,10 @@ class ChatEngine @Inject constructor(
     private fun stopAkiControlLoop(clearIdentity: Boolean) {
         akiControlJob?.cancel()
         akiControlJob = null
-        akiPresent = false
-        lastAkiSeenAt = 0L
         lastProbeSentAt = 0L
-        if (clearIdentity) akiAgentId = null
-        val id = akiAgentId.orEmpty()
         scope.launch(Dispatchers.Main) {
-            agentStatus = agentStatus.copy(
-                present = false,
-                lastSeenAt = 0L,
-                agentId = id,
-            )
+            memberStates.clear()
+            if (clearIdentity) selectedAgentId = null
         }
     }
 
@@ -449,36 +461,26 @@ class ChatEngine @Inject constructor(
         if (meta["protocolVersion"]?.toIntOrNull() != PROTOCOL_VERSION) return
         val senderId = envelope.senderId
         if (senderId.isNotEmpty() && senderId == settingsStore.deviceId) return
-        val agent = meta["agent"].orEmpty()
-        val locked = akiAgentId
-        if (locked != null && senderId.isNotEmpty() && senderId != locked) return
-        if (locked == null) {
-            if (agent != "aki") return
-            if (senderId.isNotEmpty()) akiAgentId = senderId
-        }
-        val now = System.currentTimeMillis()
+        val agentId = meta["agentId"].orEmpty()
+            .ifBlank { meta["agent"].orEmpty() }
+            .ifBlank { senderId }
+        if (agentId.isBlank() || agentId == settingsStore.deviceId) return
         if (kind == "offline") {
-            akiPresent = false
-            agentStatus = agentStatus.copy(
-                present = false,
-                lastSeenAt = lastAkiSeenAt,
-                agentId = akiAgentId.orEmpty(),
-            )
+            memberStates.remove(agentId)
+            if (selectedAgentId == agentId) selectedAgentId = null
             return
         }
-        if (kind == "presence" && agent != "aki") return
-        if (kind == "status" && agent.isNotEmpty() && agent != "aki") return
-
-        lastAkiSeenAt = now
-        akiPresent = true
-        val old = agentStatus
-        agentStatus = old.copy(
+        val now = System.currentTimeMillis()
+        val old = memberStates[agentId] ?: AgentStatus(agentId = agentId)
+        memberStates[agentId] = old.copy(
             present = true,
             lastSeenAt = now,
-            agentId = akiAgentId ?: old.agentId,
+            agentId = agentId,
             agentName = meta["agentName"].orEmpty().ifBlank {
-                old.agentName.ifBlank { "Aki" }
+                envelope.sender.ifBlank { old.agentName.ifBlank { agentId } }
             },
+            description = meta["description"].orEmpty().take(300),
+            aliases = meta["aliases"].orEmpty().take(512),
             model = meta["model"] ?: old.model,
             reasoning = meta["reasoning"] ?: old.reasoning,
             contextLimit = meta["contextLimit"]?.toIntOrNull() ?: old.contextLimit,
@@ -493,6 +495,9 @@ class ChatEngine @Inject constructor(
             uptimeS = meta["uptimeS"]?.toLongOrNull() ?: old.uptimeS,
             memoryTokens = meta["memoryTokens"]?.toIntOrNull() ?: old.memoryTokens,
         )
+        if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
+            selectedAgentId = null
+        }
     }
 
     fun addMessage(content: String, isError: Boolean = false) {
