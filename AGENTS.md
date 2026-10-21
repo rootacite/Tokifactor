@@ -101,7 +101,11 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
 
 - Single screen today: `pages/MainPage.kt` — message list + input bar + image attach.
 - Cards: `MessageCard` (selectable text, dismiss) and `ImageCard` (Coil `ByteImage`, FileKit save, dismiss).
-- Theme: default `MaterialTheme` in `App()`. No custom Color/Typography files yet — add them under `shared` if theming is requested.
+- Theme: `TokiFactorTheme` in `ui/theme/` provides four fixed-dark KataHana-inspired
+  appearances (Sky & Sakura, Ink & Paper, Midnight & Snow, Lilac & Peach), Nunito
+  typography, translucent surfaces, and the ambient glow backdrop. The selected
+  appearance is persisted by `SettingsStore`; reuse `tokiColors`/`tokiTokens`
+  instead of adding hardcoded palette values.
 - List state: `MainPageViewModel.messages` is a `mutableStateListOf` exposed as `List<ChatMessage>` (explicit backing field). Mutate the list in place; do not replace it with an immutable copy if you want Compose to see adds/removes.
 - Images: Coil `AsyncImage` from raw `ByteArray`; disk cache disabled.
 

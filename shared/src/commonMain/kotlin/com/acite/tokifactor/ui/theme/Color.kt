@@ -2,72 +2,94 @@ package com.acite.tokifactor.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-internal val TealPrimaryLight = Color(0xFF006A67)
-internal val OnTealPrimaryLight = Color(0xFFFFFFFF)
-internal val TealPrimaryContainerLight = Color(0xFF9CF1ED)
-internal val OnTealPrimaryContainerLight = Color(0xFF00201F)
-internal val TealSecondaryLight = Color(0xFF4A6361)
-internal val OnTealSecondaryLight = Color(0xFFFFFFFF)
-internal val TealSecondaryContainerLight = Color(0xFFCCE8E6)
-internal val OnTealSecondaryContainerLight = Color(0xFF051F1E)
-internal val TealTertiaryLight = Color(0xFF49607B)
-internal val OnTealTertiaryLight = Color(0xFFFFFFFF)
-internal val TealTertiaryContainerLight = Color(0xFFD0E4FF)
-internal val OnTealTertiaryContainerLight = Color(0xFF021D34)
-internal val ErrorLight = Color(0xFFBA1A1A)
-internal val OnErrorLight = Color(0xFFFFFFFF)
-internal val ErrorContainerLight = Color(0xFFFFDAD6)
-internal val OnErrorContainerLight = Color(0xFF410002)
-internal val BackgroundLight = Color(0xFFF4FBFA)
-internal val OnBackgroundLight = Color(0xFF161D1C)
-internal val SurfaceLight = Color(0xFFF4FBFA)
-internal val OnSurfaceLight = Color(0xFF161D1C)
-internal val SurfaceVariantLight = Color(0xFFDAE5E3)
-internal val OnSurfaceVariantLight = Color(0xFF3F4948)
-internal val OutlineLight = Color(0xFF6F7978)
-internal val OutlineVariantLight = Color(0xFFBEC9C7)
-internal val InverseSurfaceLight = Color(0xFF2B3231)
-internal val InverseOnSurfaceLight = Color(0xFFECF2F1)
-internal val InversePrimaryLight = Color(0xFF80D5D1)
-internal val SurfaceDimLight = Color(0xFFD5DBDA)
-internal val SurfaceBrightLight = Color(0xFFF4FBFA)
-internal val SurfaceContainerLowestLight = Color(0xFFFFFFFF)
-internal val SurfaceContainerLowLight = Color(0xFFEFF5F4)
-internal val SurfaceContainerLight = Color(0xFFE9EFEE)
-internal val SurfaceContainerHighLight = Color(0xFFE3E9E8)
-internal val SurfaceContainerHighestLight = Color(0xFFDDE4E3)
+data class TokiPalette(
+    val bgApp: Color,
+    val bgPanel: Color,
+    val bgCard: Color,
+    val stroke: Color,
+    val text: Color,
+    val textDim: Color,
+    val accentPink: Color,
+    val accentBlue: Color,
+    val accentLilac: Color,
+    val onAccent: Color,
+    val error: Color,
+    val onError: Color,
+    val errorContainer: Color,
+    val onErrorContainer: Color,
+    val qualityMint: Color = Color(0xFF7BC67E),
+    val qualityGreen: Color = Color(0xFF3DAA6D),
+    val qualityYellow: Color = Color(0xFFF2C14E),
+    val qualityOrange: Color = Color(0xFFF08A3A),
+    val qualityRed: Color = Color(0xFFE85D4C),
+) {
+    companion object {
+        val SkySakura = TokiPalette(
+            bgApp = Color(0xFF12101A),
+            bgPanel = Color(0xFF1B1730),
+            bgCard = Color(0xFF252042),
+            stroke = Color(0xFF3A3460),
+            text = Color(0xFFF4F0FF),
+            textDim = Color(0xFFA89BC8),
+            accentPink = Color(0xFFFF6BA8),
+            accentBlue = Color(0xFF7AB8FF),
+            accentLilac = Color(0xFFC9B6FF),
+            onAccent = Color(0xFF1B1028),
+            error = Color(0xFFFF8B9C),
+            onError = Color(0xFF310811),
+            errorContainer = Color(0xFF511525),
+            onErrorContainer = Color(0xFFFFDCE1),
+        )
 
-internal val TealPrimaryDark = Color(0xFF80D5D1)
-internal val OnTealPrimaryDark = Color(0xFF003736)
-internal val TealPrimaryContainerDark = Color(0xFF00504E)
-internal val OnTealPrimaryContainerDark = Color(0xFF9CF1ED)
-internal val TealSecondaryDark = Color(0xFFB0CCCA)
-internal val OnTealSecondaryDark = Color(0xFF1B3533)
-internal val TealSecondaryContainerDark = Color(0xFF324B4A)
-internal val OnTealSecondaryContainerDark = Color(0xFFCCE8E6)
-internal val TealTertiaryDark = Color(0xFFB1C8E8)
-internal val OnTealTertiaryDark = Color(0xFF19324A)
-internal val TealTertiaryContainerDark = Color(0xFF314962)
-internal val OnTealTertiaryContainerDark = Color(0xFFD0E4FF)
-internal val ErrorDark = Color(0xFFFFB4AB)
-internal val OnErrorDark = Color(0xFF690005)
-internal val ErrorContainerDark = Color(0xFF93000A)
-internal val OnErrorContainerDark = Color(0xFFFFDAD6)
-internal val BackgroundDark = Color(0xFF0E1414)
-internal val OnBackgroundDark = Color(0xFFDDE4E3)
-internal val SurfaceDark = Color(0xFF0E1414)
-internal val OnSurfaceDark = Color(0xFFDDE4E3)
-internal val SurfaceVariantDark = Color(0xFF3F4948)
-internal val OnSurfaceVariantDark = Color(0xFFBEC9C7)
-internal val OutlineDark = Color(0xFF889391)
-internal val OutlineVariantDark = Color(0xFF3F4948)
-internal val InverseSurfaceDark = Color(0xFFDDE4E3)
-internal val InverseOnSurfaceDark = Color(0xFF2B3231)
-internal val InversePrimaryDark = Color(0xFF006A67)
-internal val SurfaceDimDark = Color(0xFF0E1414)
-internal val SurfaceBrightDark = Color(0xFF343B3A)
-internal val SurfaceContainerLowestDark = Color(0xFF090F0F)
-internal val SurfaceContainerLowDark = Color(0xFF161D1C)
-internal val SurfaceContainerDark = Color(0xFF1A2120)
-internal val SurfaceContainerHighDark = Color(0xFF252B2B)
-internal val SurfaceContainerHighestDark = Color(0xFF2F3635)
+        val InkPaper = TokiPalette(
+            bgApp = Color(0xFF100E18),
+            bgPanel = Color(0xFF1A1630),
+            bgCard = Color(0xFF262044),
+            stroke = Color(0xFF3E3662),
+            text = Color(0xFFF4F0FF),
+            textDim = Color(0xFFB0A3C8),
+            accentPink = Color(0xFFE8B7D2),
+            accentBlue = Color(0xFF7A8ED4),
+            accentLilac = Color(0xFF8E7AC8),
+            onAccent = Color(0xFF21152C),
+            error = Color(0xFFFF9A9F),
+            onError = Color(0xFF35090D),
+            errorContainer = Color(0xFF541A20),
+            onErrorContainer = Color(0xFFFFDADB),
+        )
+
+        val MidnightSnow = TokiPalette(
+            bgApp = Color(0xFF0E0D12),
+            bgPanel = Color(0xFF16151C),
+            bgCard = Color(0xFF22212A),
+            stroke = Color(0xFF3A3848),
+            text = Color(0xFFF6F1EA),
+            textDim = Color(0xFFA8A0B8),
+            accentPink = Color(0xFFE8D5B5),
+            accentBlue = Color(0xFF8AA0C8),
+            accentLilac = Color(0xFFA8A0B8),
+            onAccent = Color(0xFF241C11),
+            error = Color(0xFFFF9E9E),
+            onError = Color(0xFF390B0B),
+            errorContainer = Color(0xFF561C1C),
+            onErrorContainer = Color(0xFFFFDAD9),
+        )
+
+        val LilacPeach = TokiPalette(
+            bgApp = Color(0xFF14101C),
+            bgPanel = Color(0xFF221A30),
+            bgCard = Color(0xFF2E2444),
+            stroke = Color(0xFF4A3A62),
+            text = Color(0xFFF8F0FF),
+            textDim = Color(0xFFC4B0D4),
+            accentPink = Color(0xFFFF9B7A),
+            accentBlue = Color(0xFFB39BFF),
+            accentLilac = Color(0xFFFFC4A8),
+            onAccent = Color(0xFF2B130C),
+            error = Color(0xFFFF97A4),
+            onError = Color(0xFF3A0910),
+            errorContainer = Color(0xFF581723),
+            onErrorContainer = Color(0xFFFFDCE0),
+        )
+    }
+}

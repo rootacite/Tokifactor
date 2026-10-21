@@ -1,7 +1,9 @@
 package com.acite.tokifactor.pages
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,8 +14,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -21,7 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Person
@@ -29,19 +33,14 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -52,8 +51,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -64,17 +65,25 @@ import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
 import com.acite.tokifactor.services.SettingsStore
+import com.acite.tokifactor.ui.theme.Appearance
+import com.acite.tokifactor.ui.theme.TokiCapsuleButton
+import com.acite.tokifactor.ui.theme.TokiChoiceRow
+import com.acite.tokifactor.ui.theme.TokiQuietTextButton
+import com.acite.tokifactor.ui.theme.TokiSection
+import com.acite.tokifactor.ui.theme.TokiSurface
+import com.acite.tokifactor.ui.theme.tokiColors
+import com.acite.tokifactor.ui.theme.tokiTextFieldColors
 import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.core.PickerType
 import io.github.vinceglb.filekit.core.PlatformFile
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingPage(
     onBack: () -> Unit,
     onFontScaleChange: (Float) -> Unit,
+    onAppearanceChange: (String) -> Unit,
     viewModel: SettingPageViewModel = metroViewModel(),
 ) {
     LaunchedEffect(Unit) {
@@ -97,77 +106,105 @@ fun SettingPage(
         if (file != null) viewModel.pickAvatar(file)
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = leave) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back"
+    val colors = tokiColors
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .imePadding()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+    ) {
+        SettingsHeader(onBack = leave, onSave = leave)
+
+        TokiSection(
+            title = "Appearance",
+            hint = "Choose the room's light. Changes preview immediately and save with your settings.",
+        ) {
+            Appearance.all.forEach { appearance ->
+                val selected = appearance.id == viewModel.appearanceId
+                TokiChoiceRow(
+                    selected = selected,
+                    onClick = {
+                        viewModel.appearanceId = appearance.id
+                        onAppearanceChange(appearance.id)
+                    },
+                ) {
+                    PaletteSwatch(appearance)
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            appearance.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.text,
+                        )
+                        Text(
+                            appearance.blurb,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.textDim,
                         )
                     }
-                },
-                actions = {
-                    TextButton(onClick = leave) {
-                        Text("Save")
+                    if (selected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = colors.accentPink,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
-            )
+            }
         }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+
+        TokiSection(title = "Profile", hint = "Shown next to your messages on this device.") {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 Box(
                     modifier = Modifier
                         .size(72.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .background(colors.bgCard)
+                        .border(1.dp, colors.stroke.copy(alpha = 0.8f), CircleShape)
                         .clickable { avatarPickerLauncher.launch() },
-                    contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.Center,
                 ) {
                     val photo = viewModel.avatarBytes
                     if (photo != null) {
                         ByteImage(
                             imageBytes = photo,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
+                            modifier = Modifier.fillMaxSize(),
                         )
                     } else {
                         Icon(
                             imageVector = Icons.Default.Person,
                             contentDescription = "Avatar",
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            tint = colors.accentLilac,
                         )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Avatar", style = MaterialTheme.typography.titleSmall)
                     Text(
-                        text = "Shown next to your messages on this device.",
+                        text = "Tap the circle to choose a photo.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = colors.textDim,
                     )
                     Row {
-                        TextButton(onClick = { avatarPickerLauncher.launch() }) {
-                            Text("Choose photo")
-                        }
+                        TokiQuietTextButton(
+                            text = "Choose photo",
+                            onClick = { avatarPickerLauncher.launch() },
+                        )
                         if (viewModel.avatarBytes != null) {
-                            TextButton(onClick = { viewModel.clearAvatar() }) {
-                                Text("Remove")
-                            }
+                            TokiQuietTextButton(
+                                text = "Remove",
+                                onClick = viewModel::clearAvatar,
+                                color = colors.error,
+                            )
                         }
                     }
                 }
@@ -177,57 +214,63 @@ fun SettingPage(
                 Text(
                     text = error,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+                    color = colors.error,
                 )
             }
-            FontSizeSetting(
-                fontScale = viewModel.fontScale,
-                onFontScaleChange = { value ->
-                    viewModel.fontScale = value
-                    onFontScaleChange(value)
-                },
-            )
             OutlinedTextField(
                 value = viewModel.displayName,
                 onValueChange = { viewModel.displayName = it },
                 label = { Text("Display name") },
-                supportingText = { Text("Shown to other devices. Blank restores the device name.") },
+                supportingText = { Text("Blank restores the device name.") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = tokiTextFieldColors(),
             )
+        }
+
+        FontSizeSetting(
+            fontScale = viewModel.fontScale,
+            onFontScaleChange = { value ->
+                viewModel.fontScale = value
+                onFontScaleChange(value)
+            },
+        )
+
+        TokiSection(title = "Security", hint = "Both devices must use exactly the same magic string.") {
             OutlinedTextField(
                 value = viewModel.magicString,
                 onValueChange = { viewModel.magicString = it },
                 label = { Text("Magic string") },
                 placeholder = { Text(SettingsStore.DEFAULT_MAGIC_STRING) },
                 supportingText = {
-                    Text("Shared secret used to encrypt messages. Must match on both devices. Default: ${SettingsStore.DEFAULT_MAGIC_STRING}")
+                    Text("Shared secret used to encrypt messages. Default: ${SettingsStore.DEFAULT_MAGIC_STRING}")
                 },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = tokiTextFieldColors(),
             )
-            BrokerSelector(viewModel)
-            HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Chat history", style = MaterialTheme.typography.titleSmall)
+        }
+
+        BrokerSelector(viewModel)
+
+        TokiSection(
+            title = "Chat history",
+            hint = "Messages, photos, and files on this device. Clearing does not tell other peers.",
+        ) {
+            TokiCapsuleButton(
+                text = "Clear chat history",
+                onClick = { clearStep = 1 },
+                accent = colors.error,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (historyCleared) {
                 Text(
-                    text = "Messages, photos, and files on this device. Clearing does not tell other peers.",
+                    text = "Chat history cleared.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textDim,
                 )
-                TextButton(onClick = { clearStep = 1 }) {
-                    Text(
-                        text = "Clear chat history",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (historyCleared) {
-                    Text(
-                        text = "Chat history cleared.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
             }
         }
     }
@@ -278,27 +321,65 @@ fun SettingPage(
 }
 
 @Composable
-private fun FontSizeSetting(
-    fontScale: Float,
-    onFontScaleChange: (Float) -> Unit,
+private fun SettingsHeader(
+    onBack: () -> Unit,
+    onSave: () -> Unit,
 ) {
+    val colors = tokiColors
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("Text size", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "Scales chat, controls, and settings on this device.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            TokiQuietTextButton(text = "Back", onClick = onBack)
+            Spacer(modifier = Modifier.weight(1f))
+            TokiQuietTextButton(text = "Save", onClick = onSave, color = colors.accentPink)
+        }
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.headlineLarge,
+            color = colors.text,
+        )
+        Text(
+            text = "tokifactor  ·  local channel",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.textDim,
+        )
+    }
+}
+
+@Composable
+private fun PaletteSwatch(appearance: Appearance) {
+    Canvas(Modifier.size(44.dp)) {
+        val radius = 11.dp.toPx()
+        val cy = size.height / 2f
+        drawCircle(appearance.palette.accentPink, radius, Offset(11.dp.toPx(), cy))
+        drawCircle(appearance.palette.accentBlue, radius, Offset(size.width / 2f, cy))
+        drawCircle(appearance.palette.accentLilac, radius, Offset(size.width - 11.dp.toPx(), cy))
+    }
+}
+
+@Composable
+private fun FontSizeSetting(
+    fontScale: Float,
+    onFontScaleChange: (Float) -> Unit,
+) {
+    val colors = tokiColors
+    TokiSection(title = "Text size", hint = "Scales chat, controls, and settings on this device.") {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Preview size",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.textDim,
+                modifier = Modifier.weight(1f),
+            )
             Text(
                 text = "${(fontScale * 100).roundToInt()}%",
                 style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                color = colors.accentPink,
             )
         }
         Slider(
@@ -316,18 +397,19 @@ private fun FontSizeSetting(
             Text(
                 text = "Smaller",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textDim,
             )
             Spacer(modifier = Modifier.weight(1f))
             if (fontScale != SettingsStore.DEFAULT_FONT_SCALE) {
-                TextButton(onClick = { onFontScaleChange(SettingsStore.DEFAULT_FONT_SCALE) }) {
-                    Text("Reset")
-                }
+                TokiQuietTextButton(
+                    text = "Reset",
+                    onClick = { onFontScaleChange(SettingsStore.DEFAULT_FONT_SCALE) },
+                )
             }
             Text(
                 text = "Larger",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textDim,
             )
         }
     }
@@ -344,30 +426,42 @@ private fun BrokerSelector(viewModel: SettingPageViewModel) {
         broker.id != selectedId && (probeById[broker.id]?.isSlow() == true)
     }
     val visible = brokers.filter { broker -> folded.none { it.id == broker.id } }
+    val colors = tokiColors
 
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    TokiSection(
+        title = "Connection",
+        hint = "Custom address or a preset. Both devices must use the same broker. >${MqttBrokers.SLOW_MS} ms folds away.",
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("MQTT broker", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "Custom address or a preset. Both devices must use the same broker. >${MqttBrokers.SLOW_MS} ms folds away.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                text = "MQTT broker",
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.textDim,
+                modifier = Modifier.weight(1f),
+            )
             if (probing) {
                 CircularProgressIndicator(
                     modifier = Modifier
                         .padding(end = 8.dp)
                         .size(16.dp),
                     strokeWidth = 2.dp,
+                    color = colors.accentPink,
                 )
             }
-            TextButton(onClick = { viewModel.testAllBrokers() }, enabled = !probing && !viewModel.customProbing) {
-                Text(if (probing) "Testing…" else "Test all")
+            if (!probing) {
+                TokiQuietTextButton(
+                    text = "Test all",
+                    onClick = viewModel::testAllBrokers,
+                )
+            } else {
+                Text(
+                    text = "Testing…",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = colors.textDim,
+                )
             }
         }
         CustomBrokerEditor(viewModel)
@@ -393,12 +487,12 @@ private fun BrokerSelector(viewModel: SettingPageViewModel) {
                     imageVector = if (showSlow) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (showSlow) "Hide slow nodes" else "Show slow nodes",
                     modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = colors.textDim,
                 )
                 Text(
                     text = "${folded.size} slow or unreachable",
                     style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textDim,
                     modifier = Modifier.padding(start = 4.dp),
                 )
             }
@@ -431,132 +525,155 @@ private fun CustomBrokerEditor(viewModel: SettingPageViewModel) {
         viewModel.customPassword,
     )
     var showPassword by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(8.dp)
+    val colors = tokiColors
+    val shape = RoundedCornerShape(16.dp)
     val background = if (selected) {
-        MaterialTheme.colorScheme.primaryContainer
+        colors.accentPink.copy(alpha = 0.08f)
     } else {
-        Color.Transparent
+        Color.White.copy(alpha = 0.025f)
     }
-    Column(
+    TokiSurface(
         modifier = Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(background)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .fillMaxWidth(),
+        shape = shape,
+        color = background,
+        borderColor = if (selected) colors.accentPink.copy(alpha = 0.30f) else colors.stroke.copy(alpha = 0.38f),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(36.dp)
-                .clip(shape)
-                .clickable(onClick = viewModel::selectCustom),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Box(
+            Row(
                 modifier = Modifier
-                    .padding(end = 6.dp)
-                    .width(3.dp)
-                    .fillMaxHeight()
-                    .padding(vertical = 8.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(
-                        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent
-                    )
-            )
-            Text(
-                text = parsed.broker?.let { "Custom  ${it.endpoint}" } ?: "Custom",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            QualityMark(
-                probing = viewModel.customProbing || viewModel.probing,
-                probe = viewModel.probeById[MqttBrokers.CUSTOM_ID],
-                modifier = Modifier.padding(end = 4.dp),
-            )
-        }
-        OutlinedTextField(
-            value = viewModel.customHost,
-            onValueChange = viewModel::onCustomHostChange,
-            label = { Text("Host") },
-            placeholder = { Text("broker.example.com") },
-            supportingText = {
-                val hostError = error?.takeUnless { it.startsWith("Port") }
-                Text(hostError ?: "Hostname, host:port, or mqtts://host:port")
-            },
-            isError = error != null && !error.startsWith("Port"),
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = viewModel.customPort,
-                onValueChange = viewModel::onCustomPortChange,
-                label = { Text("Port") },
-                placeholder = { Text(if (viewModel.customTls) "8883" else "1883") },
-                isError = error?.startsWith("Port") == true,
-                supportingText = if (error?.startsWith("Port") == true) {
-                    { Text(error) }
-                } else {
-                    null
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(120.dp),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("TLS", style = MaterialTheme.typography.bodyMedium)
-                Switch(
-                    checked = viewModel.customTls,
-                    onCheckedChange = viewModel::onCustomTlsChange,
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = viewModel::selectCustom),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .padding(vertical = 9.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(if (selected) colors.accentPink else Color.Transparent),
+                )
+                Text(
+                    text = parsed.broker?.let { "Custom  ${it.endpoint}" } ?: "Custom",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                QualityMark(
+                    probing = viewModel.customProbing || viewModel.probing,
+                    probe = viewModel.probeById[MqttBrokers.CUSTOM_ID],
+                    modifier = Modifier.padding(end = 4.dp),
                 )
             }
-        }
-        OutlinedTextField(
-            value = viewModel.customUsername,
-            onValueChange = viewModel::onCustomUsernameChange,
-            label = { Text("Username") },
-            supportingText = { Text("Optional. Leave blank for anonymous brokers.") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = viewModel.customPassword,
-            onValueChange = viewModel::onCustomPasswordChange,
-            label = { Text("Password") },
-            singleLine = true,
-            visualTransformation = if (showPassword) {
-                VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
-            },
-            trailingIcon = {
-                IconButton(onClick = { showPassword = !showPassword }) {
-                    Icon(
-                        imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (showPassword) "Hide password" else "Show password",
+            OutlinedTextField(
+                value = viewModel.customHost,
+                onValueChange = viewModel::onCustomHostChange,
+                label = { Text("Host") },
+                placeholder = { Text("broker.example.com") },
+                supportingText = {
+                    val hostError = error?.takeUnless { it.startsWith("Port") }
+                    Text(hostError ?: "Hostname, host:port, or mqtts://host:port")
+                },
+                isError = error != null && !error.startsWith("Port"),
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = tokiTextFieldColors(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedTextField(
+                    value = viewModel.customPort,
+                    onValueChange = viewModel::onCustomPortChange,
+                    label = { Text("Port") },
+                    placeholder = { Text(if (viewModel.customTls) "8883" else "1883") },
+                    isError = error?.startsWith("Port") == true,
+                    supportingText = if (error?.startsWith("Port") == true) {
+                        { Text(error) }
+                    } else {
+                        null
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(120.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = tokiTextFieldColors(),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("TLS", style = MaterialTheme.typography.bodyMedium, color = colors.text)
+                    Switch(
+                        checked = viewModel.customTls,
+                        onCheckedChange = viewModel::onCustomTlsChange,
                     )
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(
-                onClick = viewModel::testCustom,
-                enabled = viewModel.canTestCustom,
+            }
+            OutlinedTextField(
+                value = viewModel.customUsername,
+                onValueChange = viewModel::onCustomUsernameChange,
+                label = { Text("Username") },
+                supportingText = { Text("Optional. Leave blank for anonymous brokers.") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = tokiTextFieldColors(),
+            )
+            OutlinedTextField(
+                value = viewModel.customPassword,
+                onValueChange = viewModel::onCustomPasswordChange,
+                label = { Text("Password") },
+                singleLine = true,
+                visualTransformation = if (showPassword) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    IconButton(onClick = { showPassword = !showPassword }) {
+                        Icon(
+                            imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password",
+                            tint = colors.textDim,
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = tokiTextFieldColors(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(if (viewModel.customProbing) "Testing…" else "Test")
+                if (viewModel.customProbing) {
+                    Text(
+                        text = "Testing…",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = colors.textDim,
+                    )
+                } else {
+                    TokiCapsuleButton(
+                        text = "Test",
+                        onClick = viewModel::testCustom,
+                        enabled = viewModel.canTestCustom,
+                        accent = colors.accentBlue,
+                    )
+                }
             }
         }
     }
@@ -570,18 +687,24 @@ private fun BrokerRow(
     probe: MqttBrokerProbe?,
     onSelect: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val colors = tokiColors
+    val shape = RoundedCornerShape(14.dp)
     val background = if (selected) {
-        MaterialTheme.colorScheme.primaryContainer
+        colors.accentPink.copy(alpha = 0.13f)
     } else {
-        Color.Transparent
+        Color.White.copy(alpha = 0.03f)
     }
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(36.dp)
+            .height(42.dp)
             .clip(shape)
             .background(background)
+            .border(
+                1.dp,
+                if (selected) colors.accentPink.copy(alpha = 0.28f) else colors.stroke.copy(alpha = 0.38f),
+                shape,
+            )
             .clickable(onClick = onSelect),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -593,13 +716,14 @@ private fun BrokerRow(
                 .padding(vertical = 8.dp)
                 .clip(RoundedCornerShape(2.dp))
                 .background(
-                    if (selected) MaterialTheme.colorScheme.primary
+                    if (selected) colors.accentPink
                     else Color.Transparent
                 )
         )
         Text(
             text = broker.name,
             style = MaterialTheme.typography.bodyMedium,
+            color = colors.text,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -607,7 +731,7 @@ private fun BrokerRow(
         Text(
             text = broker.transportLabel,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = colors.textDim,
             modifier = Modifier.padding(horizontal = 6.dp),
         )
         QualityMark(
@@ -624,7 +748,8 @@ private fun QualityMark(
     probe: MqttBrokerProbe?,
     modifier: Modifier = Modifier,
 ) {
-    val quality = qualityOf(probe, darkTheme = isSystemInDarkTheme())
+    val colors = tokiColors
+    val quality = qualityOf(probe)
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
@@ -643,6 +768,7 @@ private fun QualityMark(
                 CircularProgressIndicator(
                     modifier = Modifier.size(12.dp),
                     strokeWidth = 1.5.dp,
+                    color = colors.accentPink,
                 )
             }
         }
@@ -655,13 +781,15 @@ private data class LinkQuality(
     val label: String,
 )
 
-private fun qualityOf(probe: MqttBrokerProbe?, darkTheme: Boolean): LinkQuality? {
+@Composable
+private fun qualityOf(probe: MqttBrokerProbe?): LinkQuality? {
+    val colors = tokiColors
     val ms = probe?.latencyMs
-    val excellent = if (darkTheme) Color(0xFF81C784) else Color(0xFF2E7D32)
-    val good = if (darkTheme) Color(0xFFAED581) else Color(0xFF558B2F)
-    val fair = if (darkTheme) Color(0xFFFFD54F) else Color(0xFFF9A825)
-    val slow = if (darkTheme) Color(0xFFFFB74D) else Color(0xFFEF6C00)
-    val bad = if (darkTheme) Color(0xFFEF9A9A) else Color(0xFFC62828)
+    val excellent = colors.qualityGreen
+    val good = colors.qualityMint
+    val fair = colors.qualityYellow
+    val slow = colors.qualityOrange
+    val bad = colors.qualityRed
     return when {
         probe == null -> null
         ms != null && ms <= 150L -> LinkQuality(4, excellent, "$ms")

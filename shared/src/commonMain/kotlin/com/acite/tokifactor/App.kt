@@ -1,36 +1,28 @@
 package com.acite.tokifactor
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.safeContentPadding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.acite.tokifactor.pages.MainPage
 import com.acite.tokifactor.pages.SettingPage
 import com.acite.tokifactor.services.SettingsStore
+import com.acite.tokifactor.ui.theme.Appearance
+import com.acite.tokifactor.ui.theme.TokiBackdrop
 import com.acite.tokifactor.ui.theme.TokiFactorTheme
 import dev.zacsweers.metrox.viewmodel.LocalMetroViewModelFactory
 import dev.zacsweers.metrox.viewmodel.MetroViewModelFactory
-import org.jetbrains.compose.resources.painterResource
-
-import tokifactor.shared.generated.resources.Res
-import tokifactor.shared.generated.resources.compose_multiplatform
 
 private const val ROUTE_CHAT = "chat"
 private const val ROUTE_SETTINGS = "settings"
@@ -41,14 +33,16 @@ fun App(
     settingsStore: SettingsStore,
 ) {
     var fontScale by remember { mutableFloatStateOf(settingsStore.fontScale) }
-    TokiFactorTheme(fontScale = fontScale) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = MaterialTheme.colorScheme.background,
-        ) {
+    var appearanceId by remember { mutableStateOf(settingsStore.appearanceId) }
+    TokiFactorTheme(
+        appearance = Appearance.byId(appearanceId),
+        fontScale = fontScale,
+    ) {
+        TokiBackdrop {
             CompositionLocalProvider(LocalMetroViewModelFactory provides metroVmf) {
                 val navController = rememberNavController()
                 NavHost(
+                    modifier = Modifier.fillMaxSize(),
                     navController = navController,
                     startDestination = ROUTE_CHAT,
                     enterTransition = {
@@ -82,16 +76,18 @@ fun App(
                                 navController.navigate(ROUTE_SETTINGS) {
                                     launchSingleTop = true
                                 }
-                            }
+                            },
                         )
                     }
                     composable(ROUTE_SETTINGS) {
                         SettingPage(
                             onBack = {
                                 fontScale = settingsStore.fontScale
+                                appearanceId = settingsStore.appearanceId
                                 navController.popBackStack()
                             },
                             onFontScaleChange = { fontScale = it },
+                            onAppearanceChange = { appearanceId = it },
                         )
                     }
                 }

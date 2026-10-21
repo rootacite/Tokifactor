@@ -50,9 +50,10 @@ The channel exists for as long as clients stay connected. There is nothing to de
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.
 - **Display name** and **avatar** (shown next to your bubbles on the other device).
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
-- Light and dark **Material 3** theme that follows the system appearance.
-- Settings persist locally (magic string, name, broker, device id, avatar, and text
-  size). Chat history is **in memory** and gone when the process dies.
+- Four KataHana-inspired **dark appearances** (Sky & Sakura, Ink & Paper,
+  Midnight & Snow, Lilac & Peach) with a lavender-glass visual system.
+- Settings persist locally (magic string, name, broker, device id, avatar, text
+  size, and appearance). Chat history is **in memory** and gone when the process dies.
 
 There is no iOS, Wasm, or native-mobile target. There is no backend, no user directory, and no tests yet.
 

@@ -42,6 +42,8 @@ class SettingPageViewModel(
 
     var fontScale by mutableFloatStateOf(settingsStore.fontScale)
 
+    var appearanceId by mutableStateOf(settingsStore.appearanceId)
+
     var selectedBrokerId by mutableStateOf(settingsStore.mqttBrokerId)
 
     var customHost by mutableStateOf(settingsStore.mqttCustomHost)
@@ -89,6 +91,7 @@ class SettingPageViewModel(
         magicString = settingsStore.magicString
         displayName = settingsStore.displayName
         fontScale = settingsStore.fontScale
+        appearanceId = settingsStore.appearanceId
         selectedBrokerId = settingsStore.mqttBrokerId
         customHost = settingsStore.mqttCustomHost
         customPort = settingsStore.mqttCustomPort
@@ -225,6 +228,7 @@ class SettingPageViewModel(
         settingsStore.updateMagicString(magicString)
         settingsStore.updateDisplayName(displayName)
         settingsStore.updateFontScale(fontScale)
+        settingsStore.updateAppearanceId(appearanceId)
         settingsStore.updateAvatar(avatarBytes)
         val parsed = currentParse()
         if (selectedBrokerId == MqttBrokers.CUSTOM_ID &&

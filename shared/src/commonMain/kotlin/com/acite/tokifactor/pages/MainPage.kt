@@ -86,6 +86,11 @@ import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
 import com.acite.tokifactor.model.queueBadgeLabel
+import com.acite.tokifactor.ui.theme.TokiBubbleSurface
+import com.acite.tokifactor.ui.theme.TokiSurface
+import com.acite.tokifactor.ui.theme.tokiColors
+import com.acite.tokifactor.ui.theme.tokiTextFieldColors
+import com.acite.tokifactor.ui.theme.tokiTokens
 import com.mikepenz.markdown.m3.Markdown
 import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
@@ -210,6 +215,7 @@ fun MainPage(
     viewModel: MainPageViewModel = metroViewModel(),
 ) {
     var inputText by remember { mutableStateOf("") }
+    val colors = tokiColors
     val listState = rememberLazyListState()
     var selectionMode by remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<String>() }
@@ -310,8 +316,8 @@ fun MainPage(
 
     val listTopPad by animateDpAsState(
         targetValue = when {
-            selectionMode -> 56.dp
-            members.isNotEmpty() -> 118.dp
+            selectionMode -> 68.dp
+            members.isNotEmpty() -> 130.dp
             else -> 16.dp
         },
         animationSpec = tween(220),
@@ -320,7 +326,6 @@ fun MainPage(
 
     Box(
         modifier = Modifier
-            .background(MaterialTheme.colorScheme.background)
             .statusBarsPadding()
             .fillMaxSize()
     ) {
@@ -428,10 +433,13 @@ fun MainPage(
             exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
             modifier = Modifier.align(Alignment.TopCenter),
         ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                tonalElevation = 3.dp,
-                shadowElevation = 4.dp,
+            TokiSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(20.dp),
+                color = colors.bgPanel.copy(alpha = 0.88f),
+                borderColor = colors.accentPink.copy(alpha = 0.26f),
             ) {
                 Row(
                     modifier = Modifier
@@ -490,11 +498,12 @@ fun MainPage(
             exit = slideOutVertically(animationSpec = tween(180)) { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Surface(
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+                TokiSurface(
                     modifier = Modifier.fillMaxWidth(),
-                    tonalElevation = 3.dp,
-                    shadowElevation = 8.dp
+                    shape = RoundedCornerShape(28.dp),
+                    color = colors.bgPanel.copy(alpha = 0.88f),
+                    borderColor = colors.stroke.copy(alpha = 0.70f),
                 ) {
                     Row(
                         modifier = Modifier
@@ -510,7 +519,8 @@ fun MainPage(
                                 .weight(1f)
                                 .padding(end = 8.dp),
                             maxLines = 4,
-                            shape = RoundedCornerShape(24.dp)
+                            shape = RoundedCornerShape(22.dp),
+                            colors = tokiTextFieldColors(),
                         )
                         Spacer(modifier = Modifier.size(48.dp))
                     }
@@ -539,10 +549,13 @@ fun MainPage(
             exit = slideOutVertically(animationSpec = tween(180)) { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                tonalElevation = 3.dp,
-                shadowElevation = 8.dp,
+            TokiSurface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(24.dp),
+                color = colors.bgPanel.copy(alpha = 0.90f),
+                borderColor = colors.stroke.copy(alpha = 0.65f),
             ) {
                 Row(
                     modifier = Modifier
@@ -630,10 +643,14 @@ private fun AkiStatusBar(
     onSelect: (String) -> Unit,
     onShowInfo: (AgentStatus) -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        tonalElevation = 3.dp,
-        shadowElevation = 4.dp,
+    val colors = tokiColors
+    TokiSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = colors.bgPanel.copy(alpha = 0.86f),
+        borderColor = colors.stroke.copy(alpha = 0.68f),
     ) {
         Column(
             modifier = Modifier
@@ -649,7 +666,7 @@ private fun AkiStatusBar(
                 Text(
                     text = "${members.size} online",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = colors.textDim,
                     maxLines = 1,
                 )
                 LazyRow(
@@ -674,7 +691,7 @@ private fun AkiStatusBar(
                         Icon(
                             imageVector = Icons.Default.Info,
                             contentDescription = "Member info",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = colors.textDim,
                         )
                     }
                 }
@@ -709,7 +726,7 @@ private fun AkiStatusBar(
                         Text(
                             text = "${(percent * 100).roundToInt()}%",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = colors.textDim,
                         )
                         LinearProgressIndicator(
                             progress = { percent },
@@ -717,7 +734,7 @@ private fun AkiStatusBar(
                                 .width(48.dp)
                                 .height(3.dp)
                                 .clip(RoundedCornerShape(2.dp)),
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            trackColor = colors.bgCard,
                         )
                     }
                 }
@@ -742,18 +759,11 @@ private fun MemberChip(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Surface(
+    val colors = tokiColors
+    TokiSurface(
         shape = RoundedCornerShape(50),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-        },
-        contentColor = if (selected) {
-            MaterialTheme.colorScheme.onPrimaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        },
+        color = if (selected) colors.accentPink.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.045f),
+        borderColor = if (selected) colors.accentPink.copy(alpha = 0.34f) else colors.stroke.copy(alpha = 0.44f),
         modifier = Modifier.clickable(onClick = onClick),
     ) {
         Row(
@@ -774,19 +784,21 @@ private fun MemberChip(
                     modifier = Modifier
                         .size(20.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
+                        .background(colors.accentBlue.copy(alpha = 0.24f)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         imageVector = Icons.Default.Person,
                         contentDescription = null,
                         modifier = Modifier.size(13.dp),
+                        tint = colors.accentBlue,
                     )
                 }
             }
             Text(
                 text = member.agentName.ifBlank { member.agentId },
                 style = MaterialTheme.typography.labelMedium,
+                color = if (selected) colors.text else colors.textDim,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 110.dp),
@@ -795,7 +807,7 @@ private fun MemberChip(
                 CircularProgressIndicator(
                     modifier = Modifier.size(10.dp),
                     strokeWidth = 1.5.dp,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = colors.accentPink,
                 )
             } else {
                 Box(
@@ -811,10 +823,11 @@ private fun MemberChip(
 
 @Composable
 private fun WorkingPill() {
-    Surface(
+    val colors = tokiColors
+    TokiSurface(
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        color = colors.accentBlue.copy(alpha = 0.16f),
+        borderColor = colors.accentBlue.copy(alpha = 0.30f),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -824,11 +837,12 @@ private fun WorkingPill() {
             CircularProgressIndicator(
                 modifier = Modifier.size(9.dp),
                 strokeWidth = 1.5.dp,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                color = colors.accentBlue,
             )
             Text(
                 text = "Working…",
                 style = MaterialTheme.typography.labelSmall,
+                color = colors.text,
                 maxLines = 1,
             )
         }
@@ -837,13 +851,14 @@ private fun WorkingPill() {
 
 @Composable
 private fun memberDotColor(member: AgentStatus): Color {
+    val colors = tokiColors
     val attention = member.pendingApprovals > 0
     val working = member.activeTurn || member.queueDepth > 0
     return when {
-        attention -> MaterialTheme.colorScheme.error
-        working -> MaterialTheme.colorScheme.primary
-        !member.backendReady -> MaterialTheme.colorScheme.error
-        else -> Color(0xFF4CAF50)
+        attention -> colors.error
+        working -> colors.accentPink
+        !member.backendReady -> colors.error
+        else -> colors.qualityGreen
     }
 }
 
@@ -852,15 +867,17 @@ private fun StatusPill(
     text: String,
     modifier: Modifier = Modifier,
 ) {
-    Surface(
+    val colors = tokiColors
+    TokiSurface(
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = Color.White.copy(alpha = 0.045f),
+        borderColor = colors.stroke.copy(alpha = 0.42f),
         modifier = modifier,
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            color = colors.textDim,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
@@ -873,22 +890,24 @@ private fun StatusBadge(
     text: String,
     attention: Boolean = false,
 ) {
-    Surface(
+    val colors = tokiColors
+    TokiSurface(
         shape = RoundedCornerShape(50),
         color = if (attention) {
-            MaterialTheme.colorScheme.errorContainer
+            colors.error.copy(alpha = 0.18f)
         } else {
-            MaterialTheme.colorScheme.secondaryContainer
+            colors.accentLilac.copy(alpha = 0.16f)
         },
-        contentColor = if (attention) {
-            MaterialTheme.colorScheme.onErrorContainer
+        borderColor = if (attention) {
+            colors.error.copy(alpha = 0.38f)
         } else {
-            MaterialTheme.colorScheme.onSecondaryContainer
+            colors.accentLilac.copy(alpha = 0.32f)
         },
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            color = if (attention) colors.error else colors.text,
             maxLines = 1,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
         )
@@ -1358,25 +1377,31 @@ private fun SystemChip(
     message: ChatMessage,
     modifier: Modifier = Modifier,
 ) {
+    val colors = tokiColors
     Box(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
+        TokiSurface(
+            shape = RoundedCornerShape(14.dp),
             color = if (message.isError) {
-                MaterialTheme.colorScheme.errorContainer
+                colors.errorContainer.copy(alpha = 0.84f)
             } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)
-            }
+                colors.bgPanel.copy(alpha = 0.72f)
+            },
+            borderColor = if (message.isError) {
+                colors.error.copy(alpha = 0.42f)
+            } else {
+                colors.stroke.copy(alpha = 0.46f)
+            },
         ) {
             Text(
                 text = message.content,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (message.isError) {
-                    MaterialTheme.colorScheme.onErrorContainer
+                    colors.onErrorContainer
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                    colors.textDim
                 },
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
             )
@@ -1390,16 +1415,16 @@ private fun AgentTextBubble(
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
 ) {
+    val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
         mineAvatar = mineAvatar,
         peerAvatar = peerAvatar,
     ) {
-        Surface(
+        TokiBubbleSurface(
+            isMine = false,
             shape = bubbleShape(false),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 1.dp,
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -1413,25 +1438,31 @@ private fun AgentTextBubble(
         }
         CopyIconButton(
             text = message.content,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = colors.textDim,
         )
     }
 }
 
 @Composable
 private fun AgentToolCard(message: ChatMessage) {
+    val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
         mineAvatar = null,
         peerAvatar = null,
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
+        TokiSurface(
+            shape = RoundedCornerShape(16.dp),
             color = if (message.status == "error") {
-                MaterialTheme.colorScheme.errorContainer
+                colors.errorContainer.copy(alpha = 0.84f)
             } else {
-                MaterialTheme.colorScheme.surfaceVariant
+                colors.bgCard.copy(alpha = 0.72f)
+            },
+            borderColor = if (message.status == "error") {
+                colors.error.copy(alpha = 0.42f)
+            } else {
+                colors.stroke.copy(alpha = 0.48f)
             },
         ) {
             AgentToolRow(message = message, modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp))
@@ -1448,6 +1479,7 @@ private fun AgentToolGroupCard(
     localDeviceId: String,
     onApprovalRespond: (String, Boolean) -> Unit,
 ) {
+    val colors = tokiColors
     val toolMessages = messages.filter { it.agentKind == "tool" }
     val approvalMessages = messages.filter { it.agentKind == "approval" }
     val requiresAction = approvalMessages.any {
@@ -1483,14 +1515,19 @@ private fun AgentToolGroupCard(
         else -> "Completed"
     }
     val containerColor = when {
-        requiresAction -> MaterialTheme.colorScheme.secondaryContainer
-        anyError -> MaterialTheme.colorScheme.errorContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        requiresAction -> colors.accentBlue.copy(alpha = 0.15f)
+        anyError -> colors.errorContainer.copy(alpha = 0.84f)
+        else -> colors.bgCard.copy(alpha = 0.72f)
     }
     val contentColor = when {
-        requiresAction -> MaterialTheme.colorScheme.onSecondaryContainer
-        anyError -> MaterialTheme.colorScheme.onErrorContainer
-        else -> MaterialTheme.colorScheme.onSurface
+        requiresAction -> colors.text
+        anyError -> colors.onErrorContainer
+        else -> colors.text
+    }
+    val borderColor = when {
+        requiresAction -> colors.accentBlue.copy(alpha = 0.34f)
+        anyError -> colors.error.copy(alpha = 0.42f)
+        else -> colors.stroke.copy(alpha = 0.48f)
     }
     ChatRow(
         isMine = false,
@@ -1498,10 +1535,10 @@ private fun AgentToolGroupCard(
         mineAvatar = null,
         peerAvatar = null,
     ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
+        TokiSurface(
+            shape = RoundedCornerShape(18.dp),
             color = containerColor,
-            contentColor = contentColor,
+            borderColor = borderColor,
         ) {
             Column {
                 Row(
@@ -1519,9 +1556,9 @@ private fun AgentToolGroupCard(
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                         tint = if (anyError) {
-                            MaterialTheme.colorScheme.onErrorContainer
+                            colors.onErrorContainer
                         } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
+                            colors.textDim
                         },
                     )
                     Column(modifier = Modifier.weight(1f)) {
@@ -1572,20 +1609,24 @@ private fun AgentToolGroupCard(
                 AnimatedVisibility(visible = effectiveExpanded) {
                     Column {
                         HorizontalDivider(
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
+                            color = colors.textDim.copy(alpha = 0.15f)
                         )
                         messages.forEachIndexed { index, message ->
                             if (index > 0) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(horizontal = 12.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f),
+                                    color = colors.textDim.copy(alpha = 0.12f),
                                 )
                             }
                             if (message.agentKind == "approval") {
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
+                                TokiSurface(
+                                    shape = RoundedCornerShape(14.dp),
                                     color = approvalContainerColor(message.status),
-                                    contentColor = approvalContentColor(message.status),
+                                    borderColor = if (message.status == "timeout") {
+                                        colors.error.copy(alpha = 0.38f)
+                                    } else {
+                                        colors.accentBlue.copy(alpha = 0.26f)
+                                    },
                                     modifier = Modifier.padding(8.dp),
                                 ) {
                                     AgentApprovalContent(
@@ -1618,6 +1659,7 @@ private fun AgentToolRow(
     message: ChatMessage,
     modifier: Modifier = Modifier,
 ) {
+    val colors = tokiColors
     val status = message.status
     val label = when (status) {
         "running" -> "Running"
@@ -1636,9 +1678,9 @@ private fun AgentToolRow(
             contentDescription = null,
             modifier = Modifier.size(16.dp),
             tint = if (status == "error") {
-                MaterialTheme.colorScheme.onErrorContainer
+                colors.onErrorContainer
             } else {
-                MaterialTheme.colorScheme.onSurfaceVariant
+                colors.textDim
             },
         )
         Column(modifier = Modifier.weight(1f, fill = false)) {
@@ -1649,7 +1691,7 @@ private fun AgentToolRow(
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = colors.textDim,
             )
         }
         when (status) {
@@ -1678,17 +1720,21 @@ private fun AgentApprovalCard(
     localDeviceId: String,
     onRespond: (Boolean) -> Unit,
 ) {
+    val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
         mineAvatar = null,
         peerAvatar = null,
     ) {
-        Surface(
-            shape = RoundedCornerShape(14.dp),
+        TokiSurface(
+            shape = RoundedCornerShape(18.dp),
             color = approvalContainerColor(message.status),
-            contentColor = approvalContentColor(message.status),
-            tonalElevation = 2.dp,
+            borderColor = if (message.status == "timeout") {
+                colors.error.copy(alpha = 0.42f)
+            } else {
+                colors.accentBlue.copy(alpha = 0.30f)
+            },
         ) {
             AgentApprovalContent(
                 message = message,
@@ -1760,9 +1806,11 @@ private fun AgentApprovalContent(
                 Text(if (expanded) "Hide details" else "Show details")
             }
             if (expanded) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                val colors = tokiColors
+                TokiSurface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = colors.bgApp.copy(alpha = 0.58f),
+                    borderColor = colors.stroke.copy(alpha = 0.42f),
                 ) {
                     SelectionContainer {
                         Text(
@@ -1810,57 +1858,69 @@ private fun AgentApprovalContent(
 @Composable
 private fun approvalContainerColor(status: String): Color =
     if (status == "timeout") {
-        MaterialTheme.colorScheme.errorContainer
+        tokiColors.errorContainer.copy(alpha = 0.82f)
     } else {
-        MaterialTheme.colorScheme.secondaryContainer
+        tokiColors.accentBlue.copy(alpha = 0.14f)
     }
 
 @Composable
 private fun approvalContentColor(status: String): Color =
     if (status == "timeout") {
-        MaterialTheme.colorScheme.onErrorContainer
+        tokiColors.onErrorContainer
     } else {
-        MaterialTheme.colorScheme.onSecondaryContainer
+        tokiColors.text
     }
 
 @Composable
 private fun LetterAvatar(name: String) {
+    val colors = tokiColors
     val letter = name.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "?"
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(34.dp)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.secondaryContainer),
+            .background(colors.accentBlue.copy(alpha = 0.16f))
+            .border(1.dp, colors.accentBlue.copy(alpha = 0.34f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = letter,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSecondaryContainer
+            color = colors.text,
         )
     }
 }
 
 @Composable
 private fun UserAvatar(name: String, photo: ByteArray?) {
+    val colors = tokiColors
     if (photo != null) {
-        ByteImage(
-            imageBytes = photo,
-            contentScale = ContentScale.Crop,
+        Box(
             modifier = Modifier
-                .size(32.dp)
+                .size(34.dp)
                 .clip(CircleShape)
-        )
+                .background(colors.bgCard)
+                .border(1.dp, colors.accentLilac.copy(alpha = 0.42f), CircleShape)
+                .padding(2.dp),
+        ) {
+            ByteImage(
+                imageBytes = photo,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+            )
+        }
     } else {
         LetterAvatar(name)
     }
 }
 
 private fun bubbleShape(isMine: Boolean) = RoundedCornerShape(
-    topStart = 16.dp,
-    topEnd = 16.dp,
-    bottomStart = if (isMine) 16.dp else 4.dp,
-    bottomEnd = if (isMine) 4.dp else 16.dp,
+    topStart = 20.dp,
+    topEnd = 20.dp,
+    bottomStart = if (isMine) 20.dp else 6.dp,
+    bottomEnd = if (isMine) 6.dp else 20.dp,
 )
 
 @Composable
@@ -1896,7 +1956,7 @@ private fun ChatRow(
                 Text(
                     text = sender.ifBlank { "Unknown" },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = tokiColors.accentLilac,
                     modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
                 )
                 content()
@@ -1915,11 +1975,8 @@ fun TextBubble(
     onCancel: (() -> Unit)? = null,
 ) {
     val isMine = message.isMine
-    val contentColor = if (isMine) {
-        MaterialTheme.colorScheme.onPrimary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val colors = tokiColors
+    val contentColor = colors.text
     val maxPreviewHeight = with(LocalDensity.current) {
         val raw = LocalWindowInfo.current.containerSize.height
         if (raw <= 0) 240.dp else (raw / 3f).toDp().coerceAtLeast(96.dp)
@@ -1937,14 +1994,9 @@ fun TextBubble(
         peerAvatar = peerAvatar,
         modifier = modifier,
     ) {
-        Surface(
+        TokiBubbleSurface(
+            isMine = isMine,
             shape = bubbleShape(isMine),
-            color = if (isMine) {
-                MaterialTheme.colorScheme.primary
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
-            tonalElevation = if (isMine) 0.dp else 1.dp,
             modifier = if (collapsed) {
                 Modifier.clickable { showViewer = true }
             } else {
@@ -2019,7 +2071,7 @@ fun TextBubble(
             if (showPreview) {
                 CopyIconButton(
                     text = body,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    tint = colors.textDim,
                 )
             }
         }
@@ -2068,18 +2120,19 @@ private fun TextViewerDialog(
     text: String,
     onDismiss: () -> Unit,
 ) {
+    val colors = tokiColors
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-        Surface(
+        TokiSurface(
             modifier = Modifier
                 .fillMaxWidth()
                 .fillMaxHeight(0.92f)
                 .padding(horizontal = 12.dp, vertical = 20.dp),
-            shape = RoundedCornerShape(16.dp),
-            tonalElevation = 6.dp,
-            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(28.dp),
+            color = colors.bgPanel.copy(alpha = 0.98f),
+            borderColor = colors.stroke.copy(alpha = 0.72f),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
@@ -2091,20 +2144,22 @@ private fun TextViewerDialog(
                     Text(
                         text = "Message",
                         style = MaterialTheme.typography.titleMedium,
+                        color = colors.text,
                         modifier = Modifier.weight(1f),
                     )
                     CopyIconButton(
                         text = text,
-                        tint = MaterialTheme.colorScheme.onSurface,
+                        tint = colors.textDim,
                     )
                     IconButton(onClick = onDismiss) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
+                            tint = colors.textDim,
                         )
                     }
                 }
-                HorizontalDivider()
+                HorizontalDivider(color = colors.stroke.copy(alpha = 0.55f))
                 SelectionContainer(
                     modifier = Modifier
                         .weight(1f)
@@ -2113,7 +2168,7 @@ private fun TextViewerDialog(
                     Text(
                         text = text,
                         style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = colors.text,
                         modifier = Modifier
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
@@ -2136,6 +2191,7 @@ fun ImageBubble(
     val imageBytes = message.pic
     val imagePath = message.filePath
     val hasImage = imageBytes != null || !imagePath.isNullOrBlank()
+    val colors = tokiColors
     var showFull by remember { mutableStateOf(false) }
     val fileSaverLauncher = rememberFileSaverLauncher { }
 
@@ -2146,21 +2202,22 @@ fun ImageBubble(
         peerAvatar = peerAvatar,
         modifier = modifier,
     ) {
-        Column(
+        TokiBubbleSurface(
+            isMine = message.isMine,
             modifier = Modifier
-                .widthIn(max = 220.dp)
-                .clip(RoundedCornerShape(12.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+                .widthIn(max = 220.dp),
+            shape = RoundedCornerShape(20.dp),
         ) {
-            Box(
-                modifier = Modifier
-                    .widthIn(max = 220.dp)
-                    .heightIn(min = if (hasImage) 0.dp else 160.dp, max = 240.dp)
-                    .then(
-                        if (hasImage) Modifier.clickable { showFull = true } else Modifier
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
+            Column {
+                Box(
+                    modifier = Modifier
+                        .widthIn(max = 220.dp)
+                        .heightIn(min = if (hasImage) 0.dp else 160.dp, max = 240.dp)
+                        .then(
+                            if (hasImage) Modifier.clickable { showFull = true } else Modifier
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
                 if (hasImage) {
                     MessageImage(
                         message = message,
@@ -2209,16 +2266,18 @@ fun ImageBubble(
                         }
                     }
                 }
-            }
+                }
 
-            if (message.content.isNotBlank()) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                )
+                if (message.content.isNotBlank()) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.text,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
             }
         }
     }
@@ -2311,6 +2370,7 @@ fun FileBubble(
         if (dest != null) onSaveTo(dest)
     }
     val isMine = message.isMine
+    val colors = tokiColors
 
     ChatRow(
         isMine = isMine,
@@ -2319,14 +2379,9 @@ fun FileBubble(
         peerAvatar = peerAvatar,
         modifier = modifier,
     ) {
-        Surface(
+        TokiBubbleSurface(
+            isMine = isMine,
             shape = bubbleShape(isMine),
-            color = if (isMine) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant
-            },
-            tonalElevation = if (isMine) 0.dp else 1.dp,
             modifier = Modifier.widthIn(min = 180.dp, max = 260.dp)
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -2335,11 +2390,7 @@ fun FileBubble(
                         imageVector = Icons.AutoMirrored.Filled.InsertDriveFile,
                         contentDescription = null,
                         modifier = Modifier.size(28.dp),
-                        tint = if (isMine) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                        tint = if (isMine) colors.accentPink else colors.accentBlue,
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -2348,21 +2399,13 @@ fun FileBubble(
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
-                            color = if (isMine) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            }
+                            color = colors.text,
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = fileStatusLabel(message),
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (isMine) {
-                                MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            }
+                            color = colors.textDim,
                         )
                     }
                     if (onCancel != null) {
@@ -2372,7 +2415,8 @@ fun FileBubble(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "Cancel send"
+                                contentDescription = "Cancel send",
+                                tint = colors.textDim,
                             )
                         }
                     } else if (canSave) {
@@ -2388,7 +2432,8 @@ fun FileBubble(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Download,
-                                contentDescription = "Save file"
+                                contentDescription = "Save file",
+                                tint = colors.accentLilac,
                             )
                         }
                     }
@@ -2397,7 +2442,9 @@ fun FileBubble(
                     Spacer(modifier = Modifier.height(8.dp))
                     LinearProgressIndicator(
                         progress = { message.transferProgress },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        color = colors.accentPink,
+                        trackColor = colors.accentPink.copy(alpha = 0.20f),
                     )
                 }
             }
