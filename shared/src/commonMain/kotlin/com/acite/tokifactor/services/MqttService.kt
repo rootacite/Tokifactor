@@ -3,6 +3,7 @@ package com.acite.tokifactor.services
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttMessage
+import com.hivemq.client.mqtt.MqttGlobalPublishFilter
 import com.hivemq.client.mqtt.MqttClient
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient
 import com.hivemq.client.mqtt.mqtt5.message.publish.Mqtt5Publish
@@ -12,27 +13,42 @@ import dev.zacsweers.metro.SingleIn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.UUID
+
+enum class MqttDeliveryQos(val code: Int) {
+    AtMostOnce(0),
+    AtLeastOnce(1),
+}
 
 @SingleIn(AppScope::class)
 class MqttService @Inject constructor(
     private val settingsStore: SettingsStore,
 ) {
+    companion object {
+        private const val SESSION_EXPIRY_SECONDS = 30L * 24L * 60L * 60L
+    }
+
     private val lock = Mutex()
     private var client: Mqtt5AsyncClient? = null
 
     // Store the maximum packet size negotiated with the broker
     private var maxPacketSize: Int? = null
+    private val subscriptionLock = Any()
+    private val listeners = mutableMapOf<String, MutableList<(MqttMessage) -> Unit>>()
+    private val pendingMessages = ArrayDeque<MqttMessage>()
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -42,9 +58,14 @@ class MqttService @Inject constructor(
             disconnectUnlocked()
             var built: Mqtt5AsyncClient? = null
             try {
-                val clientId = "compose-metro-${UUID.randomUUID().toString().take(8)}"
+                val clientId = stableClientId(broker)
                 built = buildClient(broker, clientId, autoReconnect = true)
-                val connack = built.connect().await()
+                built.publishes(MqttGlobalPublishFilter.ALL) { publish -> dispatch(publish) }
+                val connack = built.connectWith()
+                    .cleanStart(false)
+                    .sessionExpiryInterval(SESSION_EXPIRY_SECONDS)
+                    .send()
+                    .await()
                 if (connack?.reasonCode?.toString() == "SUCCESS") {
                     client = built
                     maxPacketSize = connack.restrictions.maximumPacketSize
@@ -102,40 +123,59 @@ class MqttService @Inject constructor(
         return maxPacketSize
     }
 
-    suspend fun publish(topic: String, payload: String, qos: Int = 1) {
+    suspend fun publish(
+        topic: String,
+        payload: String,
+        qos: MqttDeliveryQos = MqttDeliveryQos.AtLeastOnce,
+    ) {
         val asyncClient = client ?: throw IllegalStateException("MQTT Not Connected")
 
         asyncClient.publishWith()
             .topic(topic)
-            .qos(com.hivemq.client.mqtt.datatypes.MqttQos.fromCode(qos)!!)
+            .qos(com.hivemq.client.mqtt.datatypes.MqttQos.fromCode(qos.code)!!)
             .payload(payload.toByteArray(StandardCharsets.UTF_8))
             .send()
             .await()
     }
 
-    fun subscribe(topic: String): Flow<MqttMessage> = callbackFlow {
+    fun subscribe(
+        topic: String,
+        qos: MqttDeliveryQos = MqttDeliveryQos.AtLeastOnce,
+    ): Flow<MqttMessage> = callbackFlow {
         val asyncClient = client ?: run {
             close(IllegalStateException("MQTT Not Connected"))
             return@callbackFlow
         }
 
-        asyncClient.subscribeWith()
-            .topicFilter(topic)
-            // Set NoLocal to true to instruct the broker not to echo back our own messages
-            .noLocal(true)
-            .callback { publish: Mqtt5Publish ->
-                val content = publish.payload.orElse(null)?.let { buffer ->
-                    val bytes = ByteArray(buffer.remaining())
-                    buffer.get(bytes)
-                    String(bytes, StandardCharsets.UTF_8)
-                } ?: ""
+        val listener: (MqttMessage) -> Unit = { trySend(it) }
+        val queued = synchronized(subscriptionLock) {
+            listeners.getOrPut(topic) { mutableListOf() }.add(listener)
+            pendingMessages
+                .filter { it.topic == topic }
+                .also { buffered -> pendingMessages.removeAll { it.topic == topic } }
+        }
+        queued.forEach(listener)
 
-                trySend(MqttMessage(topic = publish.topic.toString(), payload = content))
+        try {
+            asyncClient.subscribeWith()
+                .topicFilter(topic)
+                .qos(com.hivemq.client.mqtt.datatypes.MqttQos.fromCode(qos.code)!!)
+                // Set NoLocal to true to instruct the broker not to echo back our own messages
+                .noLocal(true)
+                .send()
+                .await()
+        } catch (e: Exception) {
+            synchronized(subscriptionLock) {
+                listeners[topic]?.remove(listener)
             }
-            .send()
-            .await()
+            close(e)
+            return@callbackFlow
+        }
 
         awaitClose {
+            synchronized(subscriptionLock) {
+                listeners[topic]?.remove(listener)
+            }
             try {
                 asyncClient.unsubscribeWith()
                     .topicFilter(topic)
@@ -143,7 +183,7 @@ class MqttService @Inject constructor(
             } catch (_: Exception) {
             }
         }
-    }
+    }.buffer(Channel.UNLIMITED)
 
     suspend fun disconnect() {
         lock.withLock { disconnectUnlocked() }
@@ -156,10 +196,47 @@ class MqttService @Inject constructor(
         client = null
         maxPacketSize = null
         _connected.value = false
+        synchronized(subscriptionLock) {
+            pendingMessages.clear()
+        }
         if (current != null) {
             try {
-                current.disconnect()
+                current.disconnectWith()
+                    .sessionExpiryInterval(SESSION_EXPIRY_SECONDS)
+                    .send()
             } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun stableClientId(broker: MqttBroker): String {
+        val identity = buildString {
+            append(settingsStore.deviceId)
+            append('\u0000')
+            append(broker.endpointKey())
+            append('\u0000')
+            append(settingsStore.magicString)
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(identity.toByteArray(StandardCharsets.UTF_8))
+        return "tf-" + digest.take(10).joinToString("") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
+    }
+
+    private fun dispatch(publish: Mqtt5Publish) {
+        val content = publish.payload.orElse(null)?.let { buffer ->
+            val bytes = ByteArray(buffer.remaining())
+            buffer.get(bytes)
+            String(bytes, StandardCharsets.UTF_8)
+        } ?: ""
+        val message = MqttMessage(topic = publish.topic.toString(), payload = content)
+        synchronized(subscriptionLock) {
+            val matching = listeners[message.topic]
+            if (matching.isNullOrEmpty()) {
+                pendingMessages.addLast(message)
+            } else {
+                matching.toList().forEach { listener -> listener(message) }
             }
         }
     }

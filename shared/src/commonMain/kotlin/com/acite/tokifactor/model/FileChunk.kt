@@ -17,6 +17,7 @@ data class FileChunk(
     val sender: String = "Unknown",
     val senderId: String = "",
     val avatarHash: String = "",
+    val sentAt: Long = 0L,
     val abort: Boolean = false,
     val reason: String = "",
     val size: Long = 0,
@@ -44,6 +45,7 @@ data class FileChunk(
                 "senderId" to senderId,
                 "avatarHash" to avatarHash,
                 "size" to size.toString(),
+                "sentAt" to sentAt.toString(),
             )
         }
     }
@@ -72,6 +74,7 @@ data class FileChunk(
             val sender = WireJson.extractString(payload, "sender")?.ifBlank { null } ?: "Unknown"
             val senderId = WireJson.extractString(payload, "senderId") ?: ""
             val avatarHash = WireJson.extractString(payload, "avatarHash") ?: ""
+            val sentAt = WireJson.extractString(payload, "sentAt")?.toLongOrNull() ?: 0L
             val status = WireJson.extractString(payload, "status")
             val transferId = id.substringBefore(':')
             if (transferId.isEmpty()) return null
@@ -98,6 +101,7 @@ data class FileChunk(
                 sender = sender,
                 senderId = senderId,
                 avatarHash = avatarHash,
+                sentAt = sentAt,
                 size = WireJson.extractString(payload, "size")?.toLongOrNull()?.coerceAtLeast(0) ?: 0,
             )
         }

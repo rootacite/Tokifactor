@@ -113,6 +113,7 @@ object ChatHistoryStore {
             "sender" to message.sender,
             "senderId" to message.senderId,
             "fileSize" to message.fileSize.toString(),
+            "sentAt" to message.sentAt.toString(),
         )
         message.fileName?.let { pairs += "fileName" to it }
         if (message.isAgent) {
@@ -148,6 +149,7 @@ object ChatHistoryStore {
         val senderId = WireJson.extractString(json, "senderId") ?: ""
         val fileName = WireJson.extractString(json, "fileName")
         val fileSize = WireJson.extractString(json, "fileSize")?.toLongOrNull() ?: 0L
+        val sentAt = WireJson.extractString(json, "sentAt")?.toLongOrNull() ?: 0L
         val agentKind = WireJson.extractString(json, "agentKind") ?: ""
         val turnId = WireJson.extractString(json, "turnId") ?: ""
         val segment = WireJson.extractString(json, "segment")?.toIntOrNull() ?: 0
@@ -186,6 +188,7 @@ object ChatHistoryStore {
                 timeoutS = timeoutS,
                 details = details,
                 status = status,
+                sentAt = sentAt,
             )
             "file" -> ChatMessage(
                 id = id,
@@ -199,6 +202,7 @@ object ChatHistoryStore {
                 fileName = fileName ?: "file.bin",
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
+                sentAt = sentAt,
             )
             "image" -> ChatMessage(
                 id = id,
@@ -211,6 +215,7 @@ object ChatHistoryStore {
                 isSystem = isSystem,
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
+                sentAt = sentAt,
             )
             else -> ChatMessage(
                 id = id,
@@ -221,6 +226,7 @@ object ChatHistoryStore {
                 senderId = senderId,
                 isMine = isMine,
                 isSystem = isSystem,
+                sentAt = sentAt,
             )
         }
     }

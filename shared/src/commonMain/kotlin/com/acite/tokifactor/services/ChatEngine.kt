@@ -112,6 +112,7 @@ class ChatEngine @Inject constructor(
         val senderId: String,
         val fileName: String?,
         val fileSize: Long,
+        val sentAt: Long,
         val received: BooleanArray,
         val isChunkedText: Boolean = false,
         var caption: String = "",
@@ -121,6 +122,7 @@ class ChatEngine @Inject constructor(
     private val incoming = mutableMapOf<String, IncomingBinary>()
     private val incomingWatchdogs = mutableMapOf<String, Job>()
     private val abortedTransfers = mutableSetOf<String>()
+    private val completedTransfers = ConcurrentHashMap.newKeySet<String>()
     private val outgoingJobs = mutableMapOf<String, Job>()
 
     private var mqttSessionJob: Job? = null
@@ -278,7 +280,7 @@ class ChatEngine @Inject constructor(
                             try {
                                 if (message.payload.trimStart().startsWith("{")) {
                                     val chunk = TextChunk.decode(message.payload) ?: return@collect
-                                    handleIncomingText(chunk)
+                                    handleIncomingText(chunk, message.timestamp)
                                 } else {
                                     withContext(Dispatchers.Main) {
                                         try {
@@ -286,7 +288,7 @@ class ChatEngine @Inject constructor(
                                             val clear = SecureMessageChannel.decrypt(chip, settingsStore.magicString).decodeToString()
                                             val envelope = TextEnvelope.decode(clear)
                                             if (envelope != null) {
-                                                applyIncomingEnvelope(envelope)
+                                                applyIncomingEnvelope(envelope, message.timestamp)
                                                 notePeerAvatar(envelope.senderId, envelope.avatarHash)
                                             } else {
                                                 addChatText(clear, sender = "Unknown", isMine = false)
@@ -304,7 +306,7 @@ class ChatEngine @Inject constructor(
                         .collect { message ->
                             try {
                                 val chunk = PictureChunk.decode(message.payload) ?: return@collect
-                                handleIncomingPicture(chunk)
+                                handleIncomingPicture(chunk, message.timestamp)
                             } catch (_: Exception) {}
                         }
                 }
@@ -313,12 +315,12 @@ class ChatEngine @Inject constructor(
                         .collect { message ->
                             try {
                                 val chunk = FileChunk.decode(message.payload) ?: return@collect
-                                handleIncomingFile(chunk)
+                                handleIncomingFile(chunk, message.timestamp)
                             } catch (_: Exception) {}
                         }
                 }
                 launch {
-                    mqttService.subscribe("tokifactor/avatar")
+                    mqttService.subscribe("tokifactor/avatar", MqttDeliveryQos.AtMostOnce)
                         .collect { message ->
                             try {
                                 handleAvatarEnvelope(message.payload)
@@ -326,7 +328,7 @@ class ChatEngine @Inject constructor(
                         }
                 }
                 launch {
-                    mqttService.subscribe(CONTROL_TOPIC)
+                    mqttService.subscribe(CONTROL_TOPIC, MqttDeliveryQos.AtMostOnce)
                         .collect { message ->
                             try {
                                 val envelope = decodeEnvelope(message.payload)
@@ -451,7 +453,7 @@ class ChatEngine @Inject constructor(
             return
         }
         try {
-            mqttService.publish(CONTROL_TOPIC, payload)
+            mqttService.publish(CONTROL_TOPIC, payload, MqttDeliveryQos.AtMostOnce)
         } catch (_: Exception) {
         }
     }
@@ -509,13 +511,14 @@ class ChatEngine @Inject constructor(
     }
 
     fun addMessage(content: String, isError: Boolean = false) {
-        messages.add(
+        insertMessage(
             ChatMessage(
                 id = UUID.randomUUID().toString(),
                 content = content,
                 pic = null,
                 isError = isError,
                 isSystem = true,
+                sentAt = System.currentTimeMillis(),
             )
         )
         schedulePersist()
@@ -526,21 +529,29 @@ class ChatEngine @Inject constructor(
         sender: String,
         isMine: Boolean,
         senderId: String = "",
+        id: String = UUID.randomUUID().toString(),
+        sentAt: Long = System.currentTimeMillis(),
     ) {
+        if (messages.any { it.id == id }) return
         val message = ChatMessage(
-            id = UUID.randomUUID().toString(),
+            id = id,
             content = content,
             pic = null,
             sender = sender,
             senderId = senderId,
             isMine = isMine,
+            sentAt = sentAt,
         )
-        messages.add(message)
+        insertMessage(message)
         emitNotice(message)
         schedulePersist()
     }
 
-    private fun applyIncomingEnvelope(envelope: TextEnvelope) {
+    private fun applyIncomingEnvelope(
+        envelope: TextEnvelope,
+        receivedAt: Long = System.currentTimeMillis(),
+    ) {
+        val eventAt = envelope.sentAt.takeIf { it > 0L } ?: receivedAt
         val meta = envelope.metadata
         if (meta["schema"] != "akid.v1") {
             addChatText(
@@ -548,6 +559,8 @@ class ChatEngine @Inject constructor(
                 sender = envelope.sender,
                 senderId = envelope.senderId,
                 isMine = false,
+                id = envelope.messageId.ifBlank { UUID.randomUUID().toString() },
+                sentAt = eventAt,
             )
             return
         }
@@ -555,15 +568,20 @@ class ChatEngine @Inject constructor(
         val turnId = meta["turnId"].orEmpty()
         val seq = meta["seq"]?.toIntOrNull() ?: 0
         when (kind) {
-            "turn" -> applyAgentTurn(envelope, turnId, seq)
-            "tool" -> applyAgentTool(envelope, turnId, seq)
-            "approval" -> applyAgentApproval(envelope, turnId, seq)
-            "approval_resolved" -> applyAgentApprovalResolved(envelope, turnId, seq)
-            "error" -> applyAgentError(envelope, turnId, seq)
+            "turn" -> applyAgentTurn(envelope, turnId, seq, eventAt)
+            "tool" -> applyAgentTool(envelope, turnId, seq, eventAt)
+            "approval" -> applyAgentApproval(envelope, turnId, seq, eventAt)
+            "approval_resolved" -> applyAgentApprovalResolved(envelope, turnId, seq, eventAt)
+            "error" -> applyAgentError(envelope, turnId, seq, eventAt)
         }
     }
 
-    private fun applyAgentTurn(envelope: TextEnvelope, turnId: String, seq: Int) {
+    private fun applyAgentTurn(
+        envelope: TextEnvelope,
+        turnId: String,
+        seq: Int,
+        sentAt: Long,
+    ) {
         if (turnId.isEmpty()) return
         val phase = envelope.metadata["phase"].orEmpty()
         val segment = envelope.metadata["segment"]?.toIntOrNull() ?: 0
@@ -581,6 +599,7 @@ class ChatEngine @Inject constructor(
                     seq = seq,
                     phase = phase,
                     status = "running",
+                    sentAt = sentAt,
                 )
             )
             "progress", "final" -> {
@@ -599,6 +618,7 @@ class ChatEngine @Inject constructor(
                         phase = phase,
                         markdown = true,
                         status = if (phase == "final") "complete" else "running",
+                        sentAt = sentAt,
                     )
                 )
                 if (phase == "final") schedulePersist()
@@ -621,7 +641,12 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private fun applyAgentTool(envelope: TextEnvelope, turnId: String, seq: Int) {
+    private fun applyAgentTool(
+        envelope: TextEnvelope,
+        turnId: String,
+        seq: Int,
+        sentAt: Long,
+    ) {
         if (turnId.isEmpty()) return
         val toolCallId = envelope.metadata["toolCallId"].orEmpty()
         if (toolCallId.isEmpty()) return
@@ -640,12 +665,18 @@ class ChatEngine @Inject constructor(
                 toolCallId = toolCallId,
                 toolName = envelope.metadata["toolName"].orEmpty(),
                 status = status,
+                sentAt = sentAt,
             )
         )
         if (status != "running") schedulePersist()
     }
 
-    private fun applyAgentApproval(envelope: TextEnvelope, turnId: String, seq: Int) {
+    private fun applyAgentApproval(
+        envelope: TextEnvelope,
+        turnId: String,
+        seq: Int,
+        sentAt: Long,
+    ) {
         val approvalId = envelope.metadata["approvalId"].orEmpty()
         if (approvalId.isEmpty()) return
         upsertAgent(
@@ -666,11 +697,17 @@ class ChatEngine @Inject constructor(
                 timeoutS = envelope.metadata["timeoutS"]?.toIntOrNull() ?: 0,
                 details = envelope.metadata["details"].orEmpty(),
                 status = "pending",
+                sentAt = sentAt,
             )
         )
     }
 
-    private fun applyAgentApprovalResolved(envelope: TextEnvelope, turnId: String, seq: Int) {
+    private fun applyAgentApprovalResolved(
+        envelope: TextEnvelope,
+        turnId: String,
+        seq: Int,
+        sentAt: Long,
+    ) {
         val approvalId = envelope.metadata["approvalId"].orEmpty()
         if (approvalId.isEmpty()) return
         val decision = envelope.metadata["decision"].orEmpty().ifBlank { "deny" }
@@ -692,6 +729,7 @@ class ChatEngine @Inject constructor(
                     approvalId = approvalId,
                     details = envelope.metadata["details"].orEmpty(),
                     status = decision,
+                    sentAt = sentAt,
                 )
             )
         } else {
@@ -707,7 +745,12 @@ class ChatEngine @Inject constructor(
         schedulePersist()
     }
 
-    private fun applyAgentError(envelope: TextEnvelope, turnId: String, seq: Int) {
+    private fun applyAgentError(
+        envelope: TextEnvelope,
+        turnId: String,
+        seq: Int,
+        sentAt: Long,
+    ) {
         if (turnId.isEmpty()) return
         upsertAgent(
             ChatMessage(
@@ -722,6 +765,7 @@ class ChatEngine @Inject constructor(
                 seq = seq,
                 phase = "ended",
                 status = "error",
+                sentAt = sentAt,
             )
         )
         schedulePersist()
@@ -730,9 +774,12 @@ class ChatEngine @Inject constructor(
     private fun upsertAgent(message: ChatMessage) {
         val index = messages.indexOfFirst { it.id == message.id }
         if (index < 0) {
-            messages.add(message)
+            insertMessage(message)
         } else if (message.seq >= messages[index].seq) {
-            messages[index] = message
+            val existing = messages[index]
+            messages[index] = message.copy(
+                sentAt = existing.sentAt.takeIf { it > 0L } ?: message.sentAt,
+            )
         }
     }
 
@@ -750,6 +797,11 @@ class ChatEngine @Inject constructor(
                 preview = preview,
             )
         )
+    }
+
+    private fun insertMessage(message: ChatMessage) {
+        val stamped = if (message.sentAt > 0L) message else message.copy(sentAt = System.currentTimeMillis())
+        messages.add(insertionIndexBySentAt(messages, stamped.sentAt), stamped)
     }
 
     fun removeMessage(id: String) {
@@ -817,11 +869,14 @@ class ChatEngine @Inject constructor(
         val pendingStatus = if (allow) "allow_pending" else "deny_pending"
         messages[index] = message.copy(status = pendingStatus)
         val command = if (allow) "akid-approve $approvalId" else "akid-deny $approvalId"
+        val sentAt = System.currentTimeMillis()
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = command,
             senderId = settingsStore.deviceId,
             avatarHash = ownAvatarHash(),
+            messageId = TextEnvelope.messageId(settingsStore.deviceId, sentAt, command),
+            sentAt = sentAt,
         ).encode()
         val payload = Base64.encode(
             SecureMessageChannel.encrypt(
@@ -850,11 +905,15 @@ class ChatEngine @Inject constructor(
             sendChunkedText(content, utf8)
             return
         }
+        val sentAt = System.currentTimeMillis()
+        val messageId = TextEnvelope.messageId(settingsStore.deviceId, sentAt, content)
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = content,
             senderId = settingsStore.deviceId,
             avatarHash = ownAvatarHash(),
+            messageId = messageId,
+            sentAt = sentAt,
         ).encode()
         val c = SecureMessageChannel.encrypt(envelope.encodeToByteArray(), settingsStore.magicString)
         val msg = Base64.encode(c)
@@ -868,6 +927,8 @@ class ChatEngine @Inject constructor(
             sender = settingsStore.displayName,
             senderId = settingsStore.deviceId,
             isMine = true,
+            id = messageId,
+            sentAt = sentAt,
         )
         scope.launch(Dispatchers.IO) {
             try {
@@ -881,7 +942,8 @@ class ChatEngine @Inject constructor(
         val senderName = settingsStore.displayName
         val senderId = settingsStore.deviceId
         val avatarHash = ownAvatarHash()
-        val transferId = UUID.randomUUID().toString()
+        val sentAt = System.currentTimeMillis()
+        val transferId = TextEnvelope.messageId(senderId, sentAt, content)
         val job = scope.launch(Dispatchers.IO) {
             try {
                 val payloadFile = ChunkedTransfer.payloadFile(transferId)
@@ -891,7 +953,7 @@ class ChatEngine @Inject constructor(
                 val maxPacket = mqttService.getMaximumPacketSize()
 
                 withContext(Dispatchers.Main) {
-                    messages.add(
+                    insertMessage(
                         ChatMessage(
                             id = transferId,
                             content = content,
@@ -903,6 +965,7 @@ class ChatEngine @Inject constructor(
                             chunksTotal = total,
                             fileSize = fileSize,
                             isChunkedText = true,
+                            sentAt = sentAt,
                         )
                     )
                 }
@@ -925,6 +988,8 @@ class ChatEngine @Inject constructor(
                         sender = senderName,
                         senderId = senderId,
                         avatarHash = avatarHash,
+                        messageId = transferId,
+                        sentAt = sentAt,
                         size = fileSize,
                     ).encode()
                 }
@@ -1002,6 +1067,7 @@ class ChatEngine @Inject constructor(
         val avatarHash = ownAvatarHash()
         var sendAsFile = asFile
         var sendTopic = if (asFile) "tokifactor/file" else "tokifactor/picture"
+        val sentAt = System.currentTimeMillis()
         val transferId = UUID.randomUUID().toString()
         val job = scope.launch(Dispatchers.IO) {
             try {
@@ -1022,7 +1088,7 @@ class ChatEngine @Inject constructor(
                 val maxPacket = mqttService.getMaximumPacketSize()
 
                 withContext(Dispatchers.Main) {
-                    messages.add(
+                    insertMessage(
                         ChatMessage(
                             id = transferId,
                             content = fileName ?: "",
@@ -1035,6 +1101,7 @@ class ChatEngine @Inject constructor(
                             fileName = fileName,
                             filePath = payloadFile.absolutePath,
                             fileSize = fileSize,
+                            sentAt = sentAt,
                         )
                     )
                 }
@@ -1059,6 +1126,7 @@ class ChatEngine @Inject constructor(
                             sender = senderName,
                             senderId = senderId,
                             avatarHash = avatarHash,
+                            sentAt = sentAt,
                             size = fileSize,
                         ).encode()
                     } else {
@@ -1071,6 +1139,7 @@ class ChatEngine @Inject constructor(
                             sender = senderName,
                             senderId = senderId,
                             avatarHash = avatarHash,
+                            sentAt = sentAt,
                             size = fileSize,
                         ).encode()
                     }
@@ -1208,7 +1277,7 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private suspend fun handleIncomingPicture(chunk: PictureChunk) {
+    private suspend fun handleIncomingPicture(chunk: PictureChunk, receivedAt: Long) {
         handleIncomingBinary(
             transferId = chunk.transferId,
             index = chunk.index,
@@ -1224,6 +1293,8 @@ class ChatEngine @Inject constructor(
             fileSize = chunk.size,
             mismatchLabel = "image",
             isChunkedText = false,
+            sentAt = chunk.sentAt,
+            receivedAt = receivedAt,
             caption = decryptPictureCaption(chunk.captionEncrypted),
         )
     }
@@ -1239,7 +1310,7 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private suspend fun handleIncomingFile(chunk: FileChunk) {
+    private suspend fun handleIncomingFile(chunk: FileChunk, receivedAt: Long) {
         handleIncomingBinary(
             transferId = chunk.transferId,
             index = chunk.index,
@@ -1255,10 +1326,12 @@ class ChatEngine @Inject constructor(
             fileSize = chunk.size,
             mismatchLabel = "file",
             isChunkedText = false,
+            sentAt = chunk.sentAt,
+            receivedAt = receivedAt,
         )
     }
 
-    private suspend fun handleIncomingText(chunk: TextChunk) {
+    private suspend fun handleIncomingText(chunk: TextChunk, receivedAt: Long) {
         handleIncomingBinary(
             transferId = chunk.transferId,
             index = chunk.index,
@@ -1274,6 +1347,9 @@ class ChatEngine @Inject constructor(
             fileSize = chunk.size,
             mismatchLabel = "text",
             isChunkedText = true,
+            messageId = chunk.messageId,
+            sentAt = chunk.sentAt,
+            receivedAt = receivedAt,
             metadata = chunk.metadata,
         )
     }
@@ -1293,9 +1369,20 @@ class ChatEngine @Inject constructor(
         fileSize: Long,
         mismatchLabel: String,
         isChunkedText: Boolean,
+        messageId: String = "",
+        sentAt: Long = 0L,
+        receivedAt: Long = System.currentTimeMillis(),
         caption: String = "",
         metadata: Map<String, String> = emptyMap(),
     ) {
+        val messageAt = sentAt.takeIf { it > 0L } ?: receivedAt
+        if (transferId in completedTransfers) return
+        if (withContext(Dispatchers.Main) {
+                messages.any { it.id == transferId && !it.isTransferring }
+            }
+        ) {
+            return
+        }
         if (abort) {
             withContext(Dispatchers.Main) {
                 endIncoming(
@@ -1342,6 +1429,7 @@ class ChatEngine @Inject constructor(
                 fileName = fileName,
                 fileSize = fileSize,
                 isChunkedText = isChunkedText,
+                sentAt = messageAt,
                 caption = caption,
             )
         }
@@ -1382,8 +1470,11 @@ class ChatEngine @Inject constructor(
                                 text = text,
                                 senderId = senderId,
                                 avatarHash = avatarHash,
+                                messageId = messageId,
+                                sentAt = sentAt,
                                 metadata = metadata,
-                            )
+                            ),
+                            receivedAt,
                         )
                     } else {
                         updateMessage(transferId) {
@@ -1402,6 +1493,7 @@ class ChatEngine @Inject constructor(
                         messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
                     }
                 }
+                completedTransfers.add(transferId)
                 return
             }
             val asFile = fileName != null || size > ChunkedTransfer.PREVIEW_MAX_BYTES
@@ -1423,6 +1515,7 @@ class ChatEngine @Inject constructor(
                 }
                 messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
             }
+            completedTransfers.add(transferId)
         } catch (_: Exception) {
             withContext(Dispatchers.Main) {
                 endIncoming(transferId, IncomingEnd.LocalError)
@@ -1440,10 +1533,12 @@ class ChatEngine @Inject constructor(
         fileName: String?,
         fileSize: Long,
         isChunkedText: Boolean,
+        sentAt: Long,
         caption: String,
     ): Boolean {
         if (transferId in abortedTransfers) return false
         val existingMsg = messages.indexOfFirst { it.id == transferId }
+        if (existingMsg >= 0 && !messages[existingMsg].isTransferring) return false
         val transfer = incoming[transferId]
         if (transfer != null && existingMsg < 0) {
             cancelIncomingWatchdog(transferId)
@@ -1463,6 +1558,7 @@ class ChatEngine @Inject constructor(
             senderId = senderId,
             fileName = fileName,
             fileSize = fileSize,
+            sentAt = sentAt,
             received = BooleanArray(total),
             isChunkedText = isChunkedText,
             caption = caption,
@@ -1486,7 +1582,7 @@ class ChatEngine @Inject constructor(
         }
 
         if (existingMsg < 0) {
-            messages.add(
+            insertMessage(
                 ChatMessage(
                     id = transferId,
                     content = displayContent,
@@ -1499,6 +1595,7 @@ class ChatEngine @Inject constructor(
                     fileName = displayName,
                     fileSize = state.fileSize,
                     isChunkedText = state.isChunkedText,
+                    sentAt = state.sentAt,
                 )
             )
         } else {
@@ -1630,6 +1727,7 @@ class ChatEngine @Inject constructor(
             mqttService.publish(
                 "tokifactor/avatar",
                 AvatarEnvelope.want(senderId, hash).encode(),
+                MqttDeliveryQos.AtMostOnce,
             )
         } catch (_: Exception) {
         }
@@ -1648,7 +1746,7 @@ class ChatEngine @Inject constructor(
         val maxPacket = mqttService.getMaximumPacketSize()
         if (maxPacket != null && payload.encodeToByteArray().size > maxPacket) return
         try {
-            mqttService.publish("tokifactor/avatar", payload)
+            mqttService.publish("tokifactor/avatar", payload, MqttDeliveryQos.AtMostOnce)
             lastPublishedAvatarHash = hash
         } catch (_: Exception) {
         }
@@ -1711,7 +1809,7 @@ class ChatEngine @Inject constructor(
 
     private fun replaceMessage(id: String, message: ChatMessage) {
         val i = messages.indexOfFirst { it.id == id }
-        if (i >= 0) messages[i] = message else messages.add(message)
+        if (i >= 0) messages[i] = message else insertMessage(message)
         if (!message.isTransferring) schedulePersist()
     }
 
@@ -1731,4 +1829,9 @@ class ChatEngine @Inject constructor(
             }
         }
     }
+}
+
+internal fun insertionIndexBySentAt(messages: List<ChatMessage>, sentAt: Long): Int {
+    val index = messages.indexOfFirst { it.sentAt > sentAt }
+    return if (index >= 0) index else messages.size
 }

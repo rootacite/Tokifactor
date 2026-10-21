@@ -29,6 +29,7 @@ data class ChatMessage(
     val timeoutS: Int = 0,
     val details: String = "",
     val status: String = "",
+    val sentAt: Long = 0L,
 ) {
     val isAgent: Boolean
         get() = agentKind.isNotEmpty()
@@ -97,6 +98,7 @@ data class ChatMessage(
         if (timeoutS != other.timeoutS) return false
         if (details != other.details) return false
         if (status != other.status) return false
+        if (sentAt != other.sentAt) return false
         if (!pic.contentEquals(other.pic)) return false
         if (!fileBytes.contentEquals(other.fileBytes)) return false
 
@@ -130,6 +132,7 @@ data class ChatMessage(
         result = 31 * result + timeoutS
         result = 31 * result + details.hashCode()
         result = 31 * result + status.hashCode()
+        result = 31 * result + sentAt.hashCode()
         result = 31 * result + (pic?.contentHashCode() ?: 0)
         result = 31 * result + (fileBytes?.contentHashCode() ?: 0)
         return result

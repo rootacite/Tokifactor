@@ -82,7 +82,10 @@ Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: H
 
 ### Transport
 
-- MQTT **v5**, QoS 1, `noLocal(true)` so the broker does not echo our own publishes.
+- MQTT **v5** with a 30-day persistent session and a stable per-device/channel client ID. The broker queues `text`, `picture`, and `file` messages while the app is offline.
+- `text` / `picture` / `file` use **QoS 1**; the ephemeral `control` and `avatar` topics use **QoS 0**. All subscriptions use `noLocal(true)` so the broker does not echo our own publishes.
+- Text envelopes carry a deterministic message UUID derived from sender, send time, and content. The receiver drops duplicate deliveries, including duplicates replayed after an app restart.
+- Chat bubbles are inserted by their sender timestamp rather than arrival order. MQTT does not provide a global clock or ordering across publishers, so clock skew can still affect relative order.
 - Wire payload: **UTF-8 Base64 of `nonce || ciphertext`** (12-byte random nonce, then AES-GCM-SIV output).
 - Default broker: `broker.hivemq.com:8883` (TLS). You can switch in Settings; probes are cached so the list stays usable offline.
 - Text, pictures, files, avatars, and the encrypted Aki control probe use **separate topics**
@@ -156,8 +159,10 @@ Treat this as a hobby / LAN-replacement-over-MQTT client.
 
 **Reliability and product**
 
-- Public brokers rate-limit, drop clients, and go down. Delivery is MQTT QoS 1, not a durable inbox.
-- Chat is not stored. Kill the app and the transcript is gone.
+- Offline delivery depends on the broker keeping the persistent session and queued QoS 1 messages. A client that has never completed a subscription, or whose 30-day session has expired, cannot receive older messages.
+- Public brokers rate-limit, expire sessions, and go down. QoS 1 plus a persistent session is at-least-once transport, not a guaranteed durable inbox.
+- Older builds still interoperate, but their messages carry neither a stable message ID nor a sender timestamp, so duplicates cannot be identified and ordering falls back to arrival time.
+- Chat history and completed media are stored locally and restored on startup.
 - Incomplete file transfers time out after 5 seconds of silence; large or lossy links may fail more often.
 - `isConnected()` is “we still have a client object,” not a live ping.
 - No iOS. No accounts, general user presence, typing indicators, or read receipts.

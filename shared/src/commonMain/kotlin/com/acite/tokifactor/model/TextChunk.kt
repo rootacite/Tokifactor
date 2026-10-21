@@ -17,6 +17,8 @@ data class TextChunk(
     val sender: String = "Unknown",
     val senderId: String = "",
     val avatarHash: String = "",
+    val messageId: String = "",
+    val sentAt: Long = 0L,
     val abort: Boolean = false,
     val reason: String = "",
     val size: Long = 0,
@@ -44,6 +46,8 @@ data class TextChunk(
                 "avatarHash" to avatarHash,
                 "size" to size.toString(),
             )
+            if (messageId.isNotEmpty()) pairs += "messageId" to messageId
+            if (sentAt > 0L) pairs += "sentAt" to sentAt.toString()
             TextEnvelope.STRUCTURED_KEYS.forEach { key ->
                 metadata[key]?.let { pairs += key to it }
             }
@@ -74,6 +78,8 @@ data class TextChunk(
             val sender = WireJson.extractString(payload, "sender")?.ifBlank { null } ?: "Unknown"
             val senderId = WireJson.extractString(payload, "senderId") ?: ""
             val avatarHash = WireJson.extractString(payload, "avatarHash") ?: ""
+            val messageId = WireJson.extractString(payload, "messageId") ?: ""
+            val sentAt = WireJson.extractString(payload, "sentAt")?.toLongOrNull() ?: 0L
             val status = WireJson.extractString(payload, "status")
             val transferId = id.substringBefore(':')
             if (transferId.isEmpty()) return null
@@ -103,6 +109,8 @@ data class TextChunk(
                 sender = sender,
                 senderId = senderId,
                 avatarHash = avatarHash,
+                messageId = messageId,
+                sentAt = sentAt,
                 size = WireJson.extractString(payload, "size")?.toLongOrNull()?.coerceAtLeast(0) ?: 0,
                 metadata = metadata,
             )
