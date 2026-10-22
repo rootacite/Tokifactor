@@ -26,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -49,7 +50,7 @@ import kotlin.io.encoding.Base64
 class ChatEngine @Inject constructor(
     private val mqttService: MqttService,
     private val settingsStore: SettingsStore,
-) {
+) : ChatSession {
     companion object {
         private const val CONTROL_TOPIC = "tokifactor/control"
         private const val STATUS_TIMEOUT_MS = 30_000L
@@ -62,42 +63,48 @@ class ChatEngine @Inject constructor(
     private val started = AtomicBoolean(false)
     private val historyReady = AtomicBoolean(false)
 
-    val messages: List<ChatMessage>
+    override val messages: List<ChatMessage>
         field = mutableStateListOf()
 
-    var avatarBytes by mutableStateOf(settingsStore.avatarBytes)
+    override var avatarBytes by mutableStateOf(settingsStore.avatarBytes)
         private set
 
-    var connected by mutableStateOf(false)
+    override var connected by mutableStateOf(false)
         private set
 
     private val memberStates = mutableStateMapOf<String, AgentStatus>()
 
-    var selectedAgentId by mutableStateOf<String?>(null)
+    override var selectedAgentId by mutableStateOf<String?>(null)
         private set
 
-    val members: List<AgentStatus>
+    override val members: List<AgentStatus>
         get() = memberStates.values
             .filter { it.present }
             .sortedWith(compareBy<AgentStatus>({ it.agentId != "aki" }, { it.agentName.lowercase() }, { it.agentId }))
 
-    val agentStatus: AgentStatus
+    override val agentStatus: AgentStatus
         get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
 
-    fun selectAgent(agentId: String) {
+    override fun selectAgent(agentId: String) {
         if (agentId.isNotBlank()) selectedAgentId = agentId
     }
 
-    val deviceId: String
+    override val deviceId: String
         get() = settingsStore.deviceId
 
     private val _connectionStatus = MutableStateFlow("Connecting…")
-    val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
+    override val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
     private val _inboundNotices = MutableSharedFlow<InboundNotice>(extraBufferCapacity = 32)
-    val inboundNotices: SharedFlow<InboundNotice> = _inboundNotices.asSharedFlow()
+    override val inboundNotices: SharedFlow<InboundNotice> = _inboundNotices.asSharedFlow()
 
-    val peerAvatars = mutableStateMapOf<String, ByteArray>()
+    private val _events = MutableSharedFlow<ChatEngineEvent>(
+        extraBufferCapacity = 8192,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val events: SharedFlow<ChatEngineEvent> = _events.asSharedFlow()
+
+    override val peerAvatars = mutableStateMapOf<String, ByteArray>()
     private val peerAvatarHash = mutableMapOf<String, String>()
     private val pendingWantAt = mutableMapOf<String, Long>()
     private val avatarRefreshRequested = ConcurrentHashMap.newKeySet<String>()
@@ -134,7 +141,7 @@ class ChatEngine @Inject constructor(
     private var persistJob: Job? = null
     private val persistGeneration = AtomicInteger(0)
 
-    fun start() {
+    override fun start() {
         if (!started.compareAndSet(false, true)) {
             if (historyReady.get() && mqttSessionJob?.isActive != true) startMqttSession()
             return
@@ -154,12 +161,14 @@ class ChatEngine @Inject constructor(
                 for ((id, entry) in cachedAvatars) {
                     peerAvatars[id] = entry.bytes
                     peerAvatarHash[id] = entry.hash
+                    emitEvent(ChatEngineEvent.PeerAvatarChanged(id, entry.bytes))
                 }
                 if (loaded.isNotEmpty()) {
                     val existing = messages.map { it.id }.toHashSet()
                     val restored = loaded.filter { it.id !in existing }
                     if (restored.isNotEmpty()) {
                         messages.addAll(0, restored)
+                        restored.forEach { emitEvent(ChatEngineEvent.MessageUpsert(it)) }
                     }
                 }
                 if (messages.isEmpty()) {
@@ -171,7 +180,7 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    fun refreshSettings() {
+    override fun refreshSettings() {
         avatarBytes = settingsStore.avatarBytes
         if (channelKey() != sessionChannelKey) {
             startMqttSession()
@@ -189,6 +198,11 @@ class ChatEngine @Inject constructor(
     private fun setConnected(value: Boolean, status: String) {
         connected = value
         _connectionStatus.value = status
+        emitEvent(ChatEngineEvent.ConnectionChanged(value, status))
+    }
+
+    private fun emitEvent(event: ChatEngineEvent) {
+        _events.tryEmit(event)
     }
 
     private fun startMqttSession() {
@@ -404,6 +418,7 @@ class ChatEngine @Inject constructor(
                         if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
                             selectedAgentId = null
                         }
+                        emitMembersChanged()
                     }
                 }
                 val hasMembers = memberStates.values.any { it.present }
@@ -423,7 +438,12 @@ class ChatEngine @Inject constructor(
         scope.launch(Dispatchers.Main) {
             memberStates.clear()
             if (clearIdentity) selectedAgentId = null
+            emitMembersChanged()
         }
+    }
+
+    private fun emitMembersChanged() {
+        emitEvent(ChatEngineEvent.MembersChanged(members))
     }
 
     private suspend fun publishAkiProbe() {
@@ -474,6 +494,7 @@ class ChatEngine @Inject constructor(
             memberStates.remove(agentId)
             avatarRefreshRequested.remove(agentId)
             if (selectedAgentId == agentId) selectedAgentId = null
+            emitMembersChanged()
             return
         }
         val now = System.currentTimeMillis()
@@ -508,9 +529,10 @@ class ChatEngine @Inject constructor(
         if (firstSeen) {
             schedulePeerAvatarRefresh(agentId)
         }
+        emitMembersChanged()
     }
 
-    fun addMessage(content: String, isError: Boolean = false) {
+    override fun addMessage(content: String, isError: Boolean) {
         insertMessage(
             ChatMessage(
                 id = UUID.randomUUID().toString(),
@@ -624,18 +646,24 @@ class ChatEngine @Inject constructor(
                 if (phase == "final") schedulePersist()
             }
             "ended" -> {
-                messages.removeAll { it.id == "$turnId:status" }
+                val statusId = "$turnId:status"
+                if (messages.removeAll { it.id == statusId }) {
+                    emitEvent(ChatEngineEvent.MessagesRemoved(setOf(statusId)))
+                }
                 for (index in messages.indices) {
                     val message = messages[index]
                     if (message.turnId != turnId || !message.isAgent) continue
                     if (message.phase == "progress" || message.status == "running") {
                         messages[index] = message.copy(phase = "completed", status = "complete")
+                        emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
                     }
                 }
                 schedulePersist()
             }
             "no_reply" -> {
+                val removed = messages.filter { it.turnId == turnId }.map { it.id }.toSet()
                 messages.removeAll { it.turnId == turnId }
+                if (removed.isNotEmpty()) emitEvent(ChatEngineEvent.MessagesRemoved(removed))
                 schedulePersist()
             }
         }
@@ -740,6 +768,7 @@ class ChatEngine @Inject constructor(
                     phase = "resolved",
                     status = decision,
                 )
+                emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
             }
         }
         schedulePersist()
@@ -780,6 +809,7 @@ class ChatEngine @Inject constructor(
             messages[index] = message.copy(
                 sentAt = existing.sentAt.takeIf { it > 0L } ?: message.sentAt,
             )
+            emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
         }
     }
 
@@ -793,6 +823,7 @@ class ChatEngine @Inject constructor(
         _inboundNotices.tryEmit(
             InboundNotice(
                 id = message.id,
+                senderId = message.senderId,
                 sender = message.sender.ifBlank { "Unknown" },
                 preview = preview,
             )
@@ -802,13 +833,14 @@ class ChatEngine @Inject constructor(
     private fun insertMessage(message: ChatMessage) {
         val stamped = if (message.sentAt > 0L) message else message.copy(sentAt = System.currentTimeMillis())
         messages.add(insertionIndexBySentAt(messages, stamped.sentAt), stamped)
+        emitEvent(ChatEngineEvent.MessageUpsert(stamped))
     }
 
-    fun removeMessage(id: String) {
+    override fun removeMessage(id: String) {
         deleteMessages(listOf(id))
     }
 
-    fun deleteMessages(ids: Collection<String>) {
+    override fun deleteMessages(ids: Collection<String>) {
         val set = ids.toSet()
         if (set.isEmpty()) return
         for (id in set) {
@@ -820,10 +852,11 @@ class ChatEngine @Inject constructor(
             ChatHistoryStore.deleteBlob(id)
         }
         messages.removeAll { it.id in set }
+        emitEvent(ChatEngineEvent.MessagesRemoved(set))
         schedulePersist()
     }
 
-    fun clearHistory() {
+    override fun clearHistory() {
         persistGeneration.incrementAndGet()
         persistJob?.cancel()
         persistJob = null
@@ -842,9 +875,10 @@ class ChatEngine @Inject constructor(
             ChatHistoryStore.clear()
         } catch (_: Exception) {
         }
+        emitEvent(ChatEngineEvent.HistoryCleared)
     }
 
-    fun saveMessageFile(message: ChatMessage, dest: PlatformFile) {
+    override fun saveMessageFile(message: ChatMessage, dest: PlatformFile) {
         val path = message.filePath ?: return
         scope.launch(Dispatchers.IO) {
             try {
@@ -854,11 +888,11 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    fun cancelOutgoing(transferId: String) {
+    override fun cancelOutgoing(transferId: String) {
         outgoingJobs[transferId]?.cancel()
     }
 
-    fun respondToApproval(approvalId: String, allow: Boolean) {
+    override fun respondToApproval(approvalId: String, allow: Boolean) {
         if (!connected || approvalId.isEmpty()) return
         val id = "approval:$approvalId"
         val index = messages.indexOfFirst { it.id == id }
@@ -868,6 +902,7 @@ class ChatEngine @Inject constructor(
         if (message.status != "pending") return
         val pendingStatus = if (allow) "allow_pending" else "deny_pending"
         messages[index] = message.copy(status = pendingStatus)
+        emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
         val command = if (allow) "akid-approve $approvalId" else "akid-deny $approvalId"
         val sentAt = System.currentTimeMillis()
         val envelope = TextEnvelope(
@@ -892,13 +927,14 @@ class ChatEngine @Inject constructor(
                     val current = messages.indexOfFirst { it.id == id }
                     if (current >= 0 && messages[current].status == pendingStatus) {
                         messages[current] = messages[current].copy(status = "pending")
+                        emitEvent(ChatEngineEvent.MessageUpsert(messages[current]))
                     }
                 }
             }
         }
     }
 
-    fun sendMessage(content: String) {
+    override fun sendMessage(content: String) {
         if (!connected) return
         val utf8 = content.encodeToByteArray()
         if (utf8.size > ChunkedTransfer.TEXT_CHUNK_THRESHOLD_BYTES) {
@@ -1044,7 +1080,7 @@ class ChatEngine @Inject constructor(
         outgoingJobs[transferId] = job
     }
 
-    fun sendPicture(file: PlatformFile) {
+    override fun sendPicture(file: PlatformFile) {
         sendBinary(
             file = file,
             asFile = false,
@@ -1052,7 +1088,7 @@ class ChatEngine @Inject constructor(
         )
     }
 
-    fun sendFile(file: PlatformFile) {
+    override fun sendFile(file: PlatformFile) {
         sendBinary(
             file = file,
             asFile = true,
@@ -1463,7 +1499,9 @@ class ChatEngine @Inject constructor(
                 ChunkedTransfer.deleteTransfer(transferId)
                 withContext(Dispatchers.Main) {
                     if (metadata["schema"] == "akid.v1") {
-                        messages.removeAll { it.id == transferId }
+                        if (messages.removeAll { it.id == transferId }) {
+                            emitEvent(ChatEngineEvent.MessagesRemoved(setOf(transferId)))
+                        }
                         applyIncomingEnvelope(
                             TextEnvelope(
                                 sender = sender,
@@ -1606,6 +1644,7 @@ class ChatEngine @Inject constructor(
                 chunksTotal = total,
                 fileSize = state.fileSize,
             )
+            emitEvent(ChatEngineEvent.MessageUpsert(messages[existingMsg]))
         }
 
         if (state.count < total) {
@@ -1677,6 +1716,7 @@ class ChatEngine @Inject constructor(
             peerAvatars.remove(senderId)
             peerAvatarHash.remove(senderId)
             pendingWantAt.remove(senderId)
+            emitEvent(ChatEngineEvent.PeerAvatarChanged(senderId, null))
             scope.launch(Dispatchers.IO) {
                 try {
                     PeerAvatarStore.delete(senderId)
@@ -1687,6 +1727,7 @@ class ChatEngine @Inject constructor(
         }
         if (peerAvatarHash[senderId] != hash) {
             peerAvatars.remove(senderId)
+            emitEvent(ChatEngineEvent.PeerAvatarChanged(senderId, null))
         }
         if (peerAvatarHash[senderId] == hash && peerAvatars[senderId] != null) return
         val now = System.currentTimeMillis()
@@ -1777,6 +1818,7 @@ class ChatEngine @Inject constructor(
                 peerAvatars.remove(envelope.id)
                 peerAvatarHash.remove(envelope.id)
                 pendingWantAt.remove(envelope.id)
+                emitEvent(ChatEngineEvent.PeerAvatarChanged(envelope.id, null))
             }
             return
         }
@@ -1796,6 +1838,7 @@ class ChatEngine @Inject constructor(
             peerAvatars[envelope.id] = clear
             peerAvatarHash[envelope.id] = envelope.hash
             pendingWantAt.remove(envelope.id)
+            emitEvent(ChatEngineEvent.PeerAvatarChanged(envelope.id, clear))
         }
     }
 
@@ -1803,13 +1846,19 @@ class ChatEngine @Inject constructor(
         val i = messages.indexOfFirst { it.id == id }
         if (i >= 0) {
             messages[i] = transform(messages[i])
+            emitEvent(ChatEngineEvent.MessageUpsert(messages[i]))
             if (!messages[i].isTransferring) schedulePersist()
         }
     }
 
     private fun replaceMessage(id: String, message: ChatMessage) {
         val i = messages.indexOfFirst { it.id == id }
-        if (i >= 0) messages[i] = message else insertMessage(message)
+        if (i >= 0) {
+            messages[i] = message
+            emitEvent(ChatEngineEvent.MessageUpsert(message))
+        } else {
+            insertMessage(message)
+        }
         if (!message.isTransferring) schedulePersist()
     }
 

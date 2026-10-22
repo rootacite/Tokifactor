@@ -36,6 +36,10 @@ The channel exists for as long as clients stay connected. There is nothing to de
 ## Features
 
 - Encrypted **text** chat in a Line/WeChat-style bubble list.
+- On Linux, messages are received by the `tokifactord` user service even when the
+  desktop UI is closed; the Compose app reconnects over a local Unix socket.
+- Incoming human messages raise an XDG notification through `notify-send`, using
+  the sender's cached avatar as the notification icon when available.
 - **Multi-agent member bar:** agents answering the encrypted control probe on the
   same broker and magic string appear in a compact, horizontally scrollable member
   bar with avatars and status dots. The second line shows the selected member's
@@ -52,36 +56,37 @@ The channel exists for as long as clients stay connected. There is nothing to de
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
 - Four KataHana-inspired **dark appearances** (Sky & Sakura, Ink & Paper,
   Midnight & Snow, Lilac & Peach) with a lavender-glass visual system.
-- Settings persist locally (magic string, name, broker, device id, avatar, text
-  size, and appearance). Chat history is **in memory** and gone when the process dies.
+- Settings, chat history, photos, and files persist locally (magic string, name,
+  broker, device id, avatar, text size, and appearance included).
 
-There is no iOS, Wasm, or native-mobile target. There is no backend, no user directory, and no tests yet.
+There is no iOS, Wasm, or native-mobile target. There is no backend and no user directory.
 
 ## How it works
 
 ```
-Android MainActivity / Desktop main()
-        │
-        ▼
-   AppGraph (Metro DI)
-        │
-        ▼
-   Compose UI  ──►  MainPageViewModel
-                       │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-     MqttService   SettingsStore  SecureMessageChannel
-     (HiveMQ v5)   (local TOML)   (BouncyCastle)
-          │
-          ▼
-   public MQTT broker
-     tokifactor/text | picture | file | avatar | control
+Android: MainActivity ─► AppGraph ─► ChatEngine ─► HiveMQ v5 ─► broker
+
+Linux:   CMP UI ─► DesktopChatSession ─► Unix socket ─► tokifactord.service
+                                                        │
+                                                        ├─► ChatEngine
+                                                        ├─► ChatHistoryStore
+                                                        ├─► XDG notifications
+                                                        └─► HiveMQ v5 ─► broker
 ```
+
+On Linux the daemon is the only process that subscribes to MQTT chat topics and
+the only writer of chat history, peer avatars, and transfer caches. The Compose
+app mirrors daemon snapshots/events and sends commands (send, delete, cancel,
+clear history, approvals) back over `$XDG_RUNTIME_DIR/tokifactor/tokifactord.sock`.
+Other desktop operating systems continue to use the embedded engine.
 
 Almost all product code lives in `:shared` (`commonMain` is JVM-shaped Kotlin: HiveMQ, BouncyCastle, `java.nio`). `:androidApp` and `:desktopApp` are thin entry points.
 
 ### Transport
 
+- The Linux daemon owns the persistent MQTT session, including text, pictures,
+  files, avatars, Aki presence, and control messages. The desktop app does not
+  subscribe to those topics.
 - MQTT **v5** with a 30-day persistent session and a stable per-device/channel client ID. The broker queues `text`, `picture`, and `file` messages while the app is offline.
 - `text` / `picture` / `file` use **QoS 1**; the ephemeral `control` and `avatar` topics use **QoS 0**. All subscriptions use `noLocal(true)` so the broker does not echo our own publishes.
 - Text envelopes carry a deterministic message UUID derived from sender, send time, and content. The receiver drops duplicate deliveries, including duplicates replayed after an app restart.
@@ -163,6 +168,9 @@ Treat this as a hobby / LAN-replacement-over-MQTT client.
 - Public brokers rate-limit, expire sessions, and go down. QoS 1 plus a persistent session is at-least-once transport, not a guaranteed durable inbox.
 - Older builds still interoperate, but their messages carry neither a stable message ID nor a sender timestamp, so duplicates cannot be identified and ordering falls back to arrival time.
 - Chat history and completed media are stored locally and restored on startup.
+- On Linux, chat history is written by `tokifactord`; the UI keeps a read-only
+  local copy while the daemon is unavailable and replaces it with the daemon
+  snapshot after reconnecting.
 - Incomplete file transfers time out after 5 seconds of silence; large or lossy links may fail more often.
 - `isConnected()` is “we still have a client object,” not a live ping.
 - No iOS. No accounts, general user presence, typing indicators, or read receipts.
@@ -178,6 +186,8 @@ If you need real confidentiality, run your own broker with authentication, use a
 | Android | minSdk 24, compile/target SDK 37 |
 | Gradle | 9.6.1 via `./gradlew` — do not rely on a system `gradle` |
 | Android SDK | set `sdk.dir` in `local.properties` (gitignored) |
+| Linux daemon | systemd user manager and `systemctl --user` |
+| Notifications | `notify-send` from libnotify (warned about, but not required, at install time) |
 
 Network access is required at runtime. Android already declares `INTERNET` (and legacy storage permissions for file save/pick).
 
@@ -190,6 +200,10 @@ From the repo root:
 ./gradlew :desktopApp:run
 ./gradlew :desktopApp:hotRun --auto          # Compose hot reload
 
+# Linux daemon (foreground; normally started by systemd)
+./gradlew :desktopApp:packageUberJarForCurrentOS
+java -jar desktopApp/build/compose/jars/*.jar --daemon
+
 # Android debug APK
 ./gradlew :androidApp:assembleDebug
 
@@ -199,6 +213,23 @@ From the repo root:
 ```
 
 IDE run configurations from the Compose Multiplatform template should also work.
+
+### Linux installation
+
+`install.sh` installs the desktop entry, the daemon jar/launcher, and the
+`tokifactord.service` user unit, then enables and starts the service:
+
+```bash
+./install.sh
+systemctl --user status tokifactord.service
+journalctl --user -u tokifactord.service -f
+./install.sh -u   # stop/disable daemon and remove installed files
+```
+
+The daemon follows the login session and does not enable lingering. Its XDG
+notifications require a reachable user D-Bus session and `notify-send`; if the
+command is missing, messages are still received and stored, but no popup appears.
+Chat data in `~/.tokifactor` is preserved by uninstall.
 
 ### Packages
 
@@ -218,7 +249,7 @@ There is nothing to deploy on a server. “Deployment” is: install the APK or 
 | --- | --- |
 | `:shared` | UI, ViewModels, MQTT, crypto, models (Compose Multiplatform) |
 | `:androidApp` | `MainActivity`, manifest, launcher icons |
-| `:desktopApp` | JVM `main()` and Compose Desktop window |
+| `:desktopApp` | JVM `main()`, Compose Desktop window, and `--daemon` entry point |
 
 Stack: Kotlin 2.4, Compose Multiplatform 1.11, Material 3, Metro DI, HiveMQ MQTT client, BouncyCastle, Coil 3, FileKit.
 

@@ -6,7 +6,7 @@ Guidance for coding agents working in this repository.
 
 TokiFactor is a **Kotlin Multiplatform Compose** chat app for **Android** and **Desktop (JVM)**. Peers exchange encrypted text and images over a public MQTT v5 broker.
 
-There is **no iOS target**, no backend of our own, and **no tests yet**. Product code lives almost entirely in `:shared`; `:androidApp` and `:desktopApp` are thin entry points.
+There is **no iOS target** and no backend of our own. Product code lives almost entirely in `:shared`; `:androidApp` and `:desktopApp` are thin entry points. Focused tests live under `shared/src/commonTest` and `shared/src/jvmTest`.
 
 Package: `com.acite.tokifactor`  
 App name / window title: `tokifactor`
@@ -17,7 +17,7 @@ App name / window title: `tokifactor`
 |---|---|
 | `:shared` | All UI, ViewModels, MQTT, crypto, models. KMP library with `commonMain`, `androidMain`, `jvmMain`. |
 | `:androidApp` | `MainActivity` + AndroidManifest + launcher icons. |
-| `:desktopApp` | JVM `main()` + Compose Desktop window. |
+| `:desktopApp` | JVM `main()` + Compose Desktop window, plus the `--daemon` entry point. |
 
 Gradle includes only these three (`settings.gradle.kts`). Do not add iOS / wasm / native unless asked.
 
@@ -50,6 +50,7 @@ Do not hardcode versions in module `build.gradle.kts`. Add catalog entries, then
 | Android minSdk | 24 |
 | DI | Metro `1.3.2` + Metrox ViewModel |
 | MQTT | HiveMQ MQTT client `1.3.17` (MQTT **v5**, async) |
+| IPC | Unix domain socket + NDJSON (`kotlinx-serialization-json` 1.9.0) |
 | Crypto | BouncyCastle `bcprov-jdk18on` |
 | Images | Coil 3 |
 | File pick/save | FileKit `0.8.8` |
@@ -69,9 +70,17 @@ MainActivity / desktop main()
                       SecureMessageChannel (object)
 ```
 
+Linux desktop is the exception. `tokifactord.service` runs the same `ChatEngine`
+headlessly, owns MQTT receive/send, and is the sole writer of history, avatars,
+and transfer files. The CMP process connects to
+`$XDG_RUNTIME_DIR/tokifactor/tokifactord.sock`, mirrors daemon state, and sends
+commands. Do not start a second MQTT receiver in the Linux UI process. Android and
+non-Linux desktop keep the embedded engine path.
+
 ### DI (Metro)
 
-- Graph: `AppGraph` in `Graphs.kt` — `@DependencyGraph(AppScope::class) interface AppGraph : ViewModelGraph`
+- Graph: `AppGraph` is platform-specific (`shared/src/androidMain/.../Graphs.kt` and
+  `shared/src/jvmMain/.../Graphs.kt`); the JVM side also defines `DaemonGraph`.
 - Create graphs with `dev.zacsweers.metro.createGraph<AppGraph>()` in each entry point.
 - Pass `appGraph.metroViewModelFactory` into `App`.
 - `InjectedViewModelFactory` (`Factory.kt`) `@ContributesBinding(AppScope)` so ViewModels resolve.
@@ -192,7 +201,7 @@ Do not delete these in drive-by diffs. Do not extend Greeting as the app’s arc
 - Android INTERNET (and storage) permissions are already in the manifest.
 - HiveMQ + BouncyCastle pull Java/Netty; Android packaging excludes conflicting META-INF files on purpose.
 - `ChatMessage.equals` uses `javaClass`; keep it consistent if you touch equality.
-- No git repo in this tree at the time of writing; do not assume remotes or CI.
+- The repository may be a local checkout without CI; do not assume deployment automation.
 - `local.properties` is gitignored (SDK path). Do not commit secrets there.
 
 ## How to implement typical tasks
@@ -202,6 +211,11 @@ Do not delete these in drive-by diffs. Do not extend Greeting as the app’s arc
 **New injectable service:** `@SingleIn(AppScope)` + `@Inject constructor`, take it in the ViewModel constructor.
 
 **New MQTT topic:** subscribe in `MainPageViewModel.init` (or a dedicated service), decrypt Base64 → `SecureMessageChannel.decrypt`, then `addMessage` / `addPicture`. Publish the same way as `sendMessage` / `sendPicture` (encrypt → Base64 → size check → `publish`).
+
+On Linux, add new receive behavior to the daemon-side `ChatEngine` and surface it
+through the daemon protocol (`DaemonSnapshot`, `DaemonEvent`, `DaemonClientFrame`)
+rather than subscribing from the desktop app. UI-visible mutations in
+`ChatEngine` must emit a `ChatEngineEvent` so connected clients stay in sync.
 
 **UI-only change:** stay in `MainPage.kt` composables; keep ViewModel as the I/O boundary.
 

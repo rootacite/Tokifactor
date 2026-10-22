@@ -6,10 +6,12 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
+import com.acite.tokifactor.services.ChatSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class ChatForegroundService : Service() {
@@ -18,7 +20,7 @@ class ChatForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         val app = application as TokiFactorApp
-        val engine = app.graph.chatEngine
+        val engine = app.graph.chatSession
         ChatNotifications.ensureChannels(this)
         startInForeground(engine.connectionStatus.value)
         engine.start()
@@ -30,7 +32,11 @@ class ChatForegroundService : Service() {
         scope.launch {
             engine.inboundNotices.collect { notice ->
                 if (!app.chatUiVisible) {
-                    ChatNotifications.notifyMessage(this@ChatForegroundService, notice)
+                    ChatNotifications.notifyMessage(
+                        this@ChatForegroundService,
+                        notice,
+                        resolveAvatar(engine, notice.senderId),
+                    )
                 }
             }
         }
@@ -46,6 +52,15 @@ class ChatForegroundService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private suspend fun resolveAvatar(engine: ChatSession, senderId: String): ByteArray? {
+        if (senderId.isBlank()) return null
+        repeat(6) { attempt ->
+            engine.peerAvatars[senderId]?.let { return it }
+            if (attempt < 5) delay(120L)
+        }
+        return null
+    }
 
     private fun startInForeground(status: String) {
         val notification = ChatNotifications.connection(this, status)

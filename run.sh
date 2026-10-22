@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Launch the TokiFactor desktop app from the packaged fat jar.
+# Launch the TokiFactor desktop app or daemon from the packaged fat jar.
 #
 # Gradle only runs when the jar is missing or older than the Kotlin sources. It
 # runs with --no-daemon so no Gradle/Kotlin daemon is left behind afterwards.
@@ -34,7 +34,10 @@ package_jar() {
 
 JAR="$(newest_jar)"
 
-if [ -z "$JAR" ]; then
+if [ -n "${TOKIFACTOR_JAR:-}" ]; then
+    JAR="$TOKIFACTOR_JAR"
+    [ -f "$JAR" ] || { echo "run.sh: TOKIFACTOR_JAR does not exist: $JAR" >&2; exit 1; }
+elif [ -z "$JAR" ]; then
     package_jar "no packaged jar yet"
     JAR="$(newest_jar)"
 elif [ -n "$(find "${WATCHED[@]}" -newer "$JAR" -print -quit 2>/dev/null || true)" ]; then
@@ -101,4 +104,4 @@ fi
 
 echo "run.sh: launching $(basename "$JAR") with $JAVA_BIN"
 cd "$REPO_ROOT"
-exec "$JAVA_BIN" -jar "$JAR"
+exec "$JAVA_BIN" -jar "$JAR" "$@"

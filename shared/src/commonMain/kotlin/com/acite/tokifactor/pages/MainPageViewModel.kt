@@ -2,7 +2,7 @@ package com.acite.tokifactor.pages
 
 import androidx.lifecycle.ViewModel
 import com.acite.tokifactor.model.ChatMessage
-import com.acite.tokifactor.services.ChatEngine
+import com.acite.tokifactor.services.ChatSession
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
@@ -13,7 +13,7 @@ import io.github.vinceglb.filekit.core.PlatformFile
 @ViewModelKey
 @ContributesIntoMap(AppScope::class)
 class MainPageViewModel(
-    private val chatEngine: ChatEngine,
+    private val chatEngine: ChatSession,
 ) : ViewModel() {
 
     val messages: List<ChatMessage>

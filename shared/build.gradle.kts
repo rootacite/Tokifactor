@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.metro)
+    alias(libs.plugins.kotlinx.serialization)
 }
 
 kotlin {
@@ -55,6 +56,7 @@ kotlin {
             implementation(libs.material.icons.extended)
             implementation(libs.markdown.renderer.m3)
             implementation(libs.okio)
+            implementation(libs.kotlinx.serialization.json)
 
             implementation(libs.ktoml.core)
             implementation(libs.ktoml.file)

@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -55,9 +56,13 @@ object ChatNotifications {
             .build()
     }
 
-    fun notifyMessage(context: Context, notice: InboundNotice) {
+    fun notifyMessage(
+        context: Context,
+        notice: InboundNotice,
+        avatarBytes: ByteArray? = null,
+    ) {
         val id = messageId(notice.id)
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+        val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(notice.sender)
             .setContentText(notice.preview)
@@ -66,7 +71,10 @@ object ChatNotifications {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openApp(context, notice.id.hashCode()))
-            .build()
+        avatarBytes?.let { bytes ->
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let(builder::setLargeIcon)
+        }
+        val notification = builder.build()
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(
                 context,

@@ -12,6 +12,7 @@ import com.acite.tokifactor.model.MqttBrokers
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
+import java.io.File
 import java.util.UUID
 
 @SingleIn(AppScope::class)
@@ -92,8 +93,25 @@ class SettingsStore @Inject constructor() {
         private set
 
     init {
+        reloadFromDisk()
+    }
+
+    @Synchronized
+    fun reload() {
+        reloadFromDisk()
+    }
+
+    private fun reloadFromDisk() {
         val file = appConfigFile()
-        val parsed = if (file.exists()) parseToml(file.readText()) else emptyMap()
+        val parsed = if (file.exists()) {
+            try {
+                parseToml(file.readText())
+            } catch (_: Exception) {
+                emptyMap()
+            }
+        } else {
+            emptyMap()
+        }
         magicString = parsed[KEY_MAGIC]?.ifBlank { null } ?: DEFAULT_MAGIC_STRING
         displayName = parsed[KEY_DISPLAY_NAME]?.ifBlank { null } ?: defaultDisplayName()
         fontScale = parsed[KEY_FONT_SCALE]
@@ -255,7 +273,7 @@ class SettingsStore @Inject constructor() {
     private fun persist() {
         val file = appConfigFile()
         file.parentFile?.mkdirs()
-        file.writeText(
+        val body =
             "$KEY_MAGIC = \"${escapeTomlString(magicString)}\"\n" +
                 "$KEY_DISPLAY_NAME = \"${escapeTomlString(displayName)}\"\n" +
                 "$KEY_FONT_SCALE = \"${fontScale}\"\n" +
@@ -267,7 +285,12 @@ class SettingsStore @Inject constructor() {
                 "$KEY_CUSTOM_USERNAME = \"${escapeTomlString(mqttCustomUsername)}\"\n" +
                 "$KEY_CUSTOM_PASSWORD = \"${escapeTomlString(mqttCustomPassword)}\"\n" +
                 "$KEY_DEVICE_ID = \"${escapeTomlString(deviceId)}\"\n"
-        )
+        val tmp = File(requireNotNull(file.parentFile), "${file.name}.tmp")
+        tmp.writeText(body)
+        if (!tmp.renameTo(file)) {
+            file.writeText(body)
+            tmp.delete()
+        }
     }
 
     private fun parseToml(text: String): Map<String, String> {

@@ -6,9 +6,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.acite.tokifactor.daemon.TokiFactorDaemon
 import dev.zacsweers.metro.createGraph
 
-fun main() {
+fun main(args: Array<String>) {
+    if (args.contains("--daemon")) {
+        TokiFactorDaemon.run()
+        return
+    }
     val appGraph = createGraph<AppGraph>()
 
     application {
