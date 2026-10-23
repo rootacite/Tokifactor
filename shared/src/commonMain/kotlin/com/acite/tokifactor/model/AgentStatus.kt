@@ -3,9 +3,10 @@ package com.acite.tokifactor.model
 data class AgentStatus(
     val present: Boolean = false,
     val lastSeenAt: Long = 0L,
-    val agentId: String = "",
-    val agentName: String = "",
+    val memberId: String = "",
+    val memberName: String = "",
     val description: String = "",
+    val memberKind: String = MEMBER_KIND_AGENT,
     val aliases: String = "",
     val model: String = "",
     val reasoning: String = "",
@@ -20,6 +21,18 @@ data class AgentStatus(
     val uptimeS: Long = 0L,
     val memoryTokens: Int = 0,
 ) {
+    val agentId: String
+        get() = memberId
+
+    val agentName: String
+        get() = memberName
+
+    val isUser: Boolean
+        get() = normalizeMemberKind(memberKind) == MEMBER_KIND_USER
+
+    val kindLabel: String
+        get() = if (isUser) "User" else "Agent"
+
     val contextPercent: Float?
         get() = if (contextLimit <= 0) null else {
             (contextTokens.toFloat() / contextLimit.toFloat()).coerceIn(0f, 1f)
@@ -45,16 +58,20 @@ fun AgentStatus.aliasList(): List<String> =
 
 fun preferredMember(members: Collection<AgentStatus>): AgentStatus? {
     val online = members.filter { it.present }
-    return online.firstOrNull { it.agentId == "aki" || it.agentName.equals("Aki", ignoreCase = true) }
+    return online.firstOrNull {
+        it.memberId == "aki" ||
+            canonicalMemberName(it.memberName) == "aki" ||
+            it.aliasList().any { alias -> canonicalMemberName(alias) == "aki" }
+    }
         ?: online.firstOrNull()
 }
 
 fun selectedMember(
     members: Collection<AgentStatus>,
-    selectedAgentId: String?,
+    selectedMemberId: String?,
 ): AgentStatus? {
     val online = members.filter { it.present }
-    return online.firstOrNull { it.agentId == selectedAgentId } ?: preferredMember(online)
+    return online.firstOrNull { it.memberId == selectedMemberId } ?: preferredMember(online)
 }
 
 fun AgentStatus.queueBadgeLabel(): String? =

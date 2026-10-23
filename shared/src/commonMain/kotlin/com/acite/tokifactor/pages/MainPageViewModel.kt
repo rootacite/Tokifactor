@@ -31,6 +31,12 @@ class MainPageViewModel(
 
     val deviceId get() = chatEngine.deviceId
 
+    val memberId get() = chatEngine.memberId
+
+    val displayName get() = chatEngine.displayName
+
+    val bio get() = chatEngine.bio
+
     val peerAvatars get() = chatEngine.peerAvatars
 
     init {

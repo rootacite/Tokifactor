@@ -11,6 +11,20 @@ There is **no iOS target** and no backend of our own. Product code lives almost 
 Package: `com.acite.tokifactor`  
 App name / window title: `tokifactor`
 
+## Mandatory local deployment
+
+Any change to runtime behavior in Aki or TokiFactor is not complete until the newest build is
+installed and the actual local process/service is restarted. Passing tests or producing a JAR/APK
+is not enough if an older process keeps running.
+
+- TokiFactor: run `./install.sh` to package/install the daemon jar and restart
+  `tokifactord.service`; reinstall the newest APK when Android behavior changed; restart the
+  desktop UI when UI behavior changed. Verify artifact timestamps and process start times.
+- Aki: install/restart the affected `akid@<profile>.service` and `akid-proxy@<profile>.service`
+  units when Aki logic changed, then check health/status or logs.
+- Skip deployment only when the user explicitly says not to deploy, and state clearly in the final
+  response that the running installation was not updated.
+
 ## Modules
 
 | Module | Role |
@@ -108,7 +122,8 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
 
 ### UI
 
-- Single screen today: `pages/MainPage.kt` — message list + input bar + image attach.
+- Screens: `pages/MainPage.kt` (message list + input bar + member profile overlay),
+  `pages/SettingPage.kt`, and `pages/MemberProfilePage.kt`.
 - Cards: `MessageCard` (selectable text, dismiss) and `ImageCard` (Coil `ByteImage`, FileKit save, dismiss).
 - Theme: `TokiFactorTheme` in `ui/theme/` provides four fixed-dark KataHana-inspired
   appearances (Sky & Sakura, Ink & Paper, Midnight & Snow, Lilac & Peach), Nunito
@@ -149,15 +164,38 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
 - `MainPage` groups consecutive `agentKind == "tool"` and `"approval"` messages from
   the same turn into one collapsed card; pending approvals force it open, and
   selection/deletion operate on every message in the group.
+- Agent `turn` text is split into multiple display bubbles at blank-line paragraph
+  boundaries. This is presentation-only: every part keeps the original message id,
+  so streaming upserts, selection, deletion, and persistence still operate on one
+  message. Fenced Markdown code blocks are never split.
 - Text envelopes may carry `akid.v1` metadata (`kind`, `turnId`, `phase`, approval and
   tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
   `status`, and `offline` messages for Aki discovery and must never enter chat
   history or create turns. Keep the plain `text` field as the fallback for older clients.
-- `ChatEngine.memberStates` is keyed by `agentId` and is the single source of truth
-  for the optional member bar. Members time out after 30 seconds without a
-  presence/status heartbeat; with no members the UI hides. Probe cadence is 15s when
-  empty and 60s when members are present. The selected member falls back to the next
-  online member, preferring the first `Aki`.
+- `AgentStatus` is used for both Aki agents and Tokifactor human peers. Its stable
+  fields are `memberId` and `memberName`; `agentId`/`agentName` remain read-only
+  aliases for old UI and wire paths. `memberKind` is `user` or `agent`; missing values
+  normalize to `agent`. `ChatEngine.memberStates` is keyed by immutable `memberId`.
+  The first transport source that announces an id owns its profile; later sources only
+  add liveness. Per-source heartbeats prevent one device going offline from removing a
+  member still announced by another device. Members time out after 30 seconds without
+  a heartbeat; with no members the UI hides. Probe cadence is 15s when empty and 20s
+  when members are present. Selection prefers the member labelled `Aki`.
+- Identities are client-local. `SettingsStore` persists `memberId` and `identityBound`
+  in `config.toml`; an existing install migrates to the deterministic legacy id for its
+  current Name, while a fresh install gets `mem_<uuid4hex>`. `identities.json` next to
+  the config is a local label/alias registry guarded by a file lock; it is not a
+  central identity authority or verification service.
+- Profiles use the control metadata `description`, limited to 512 weighted units
+  (ASCII 1; CJK/full-width/emoji 2). Probes send `memberId`, `memberName`,
+  `description`, `memberKind=user`, and legacy-compatible `agentId=memberId`,
+  `agentName=memberName`. Settings persists `bio`; changing it calls
+  `refreshSettings()` so peers see it on the next probe. An unbound client silently
+  adopts an existing Name/alias owner's member id and profile; a bound client must
+  confirm switching to another identity. Renaming to a free label keeps the member id
+  and makes the old Name a permanent alias. Outgoing envelopes, chunk metadata, avatar
+  ids, and local history use `memberId`; old Name/device keys are migrated on load and
+  messages render the current Name from the local registry.
 - `MqttMessage(topic, payload, timestamp)` — inbound MQTT only.
 
 ## Commands

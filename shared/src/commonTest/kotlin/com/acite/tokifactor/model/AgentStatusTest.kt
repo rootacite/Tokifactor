@@ -42,13 +42,16 @@ class AgentStatusTest {
 
     @Test
     fun memberSelectionPrefersFirstAkiThenFallsBackToNextOnline() {
-        val fuyu = AgentStatus(present = true, agentId = "fuyu", agentName = "Fuyu")
-        val aki = AgentStatus(present = true, agentId = "aki", agentName = "Aki")
-        val offline = AgentStatus(present = false, agentId = "haru", agentName = "Haru")
-        assertEquals("aki", preferredMember(listOf(fuyu, aki, offline))?.agentId)
-        assertEquals("fuyu", selectedMember(listOf(fuyu, aki), "fuyu")?.agentId)
-        assertEquals("fuyu", selectedMember(listOf(fuyu, offline), "aki")?.agentId)
-        assertEquals("fuyu", selectedMember(listOf(fuyu, offline), "haru")?.agentId)
+        val fuyuId = legacyMemberId("Fuyu")
+        val akiId = legacyMemberId("Aki")
+        val haruId = legacyMemberId("Haru")
+        val fuyu = AgentStatus(present = true, memberId = fuyuId, memberName = "Fuyu")
+        val aki = AgentStatus(present = true, memberId = akiId, memberName = "Aki")
+        val offline = AgentStatus(present = false, memberId = haruId, memberName = "Haru")
+        assertEquals(akiId, preferredMember(listOf(fuyu, aki, offline))?.memberId)
+        assertEquals(fuyuId, selectedMember(listOf(fuyu, aki), fuyuId)?.memberId)
+        assertEquals(fuyuId, selectedMember(listOf(fuyu, offline), akiId)?.memberId)
+        assertEquals(fuyuId, selectedMember(listOf(fuyu, offline), haruId)?.memberId)
     }
 
     @Test
@@ -91,6 +94,7 @@ class AgentStatusTest {
             "agentId" to "aki",
             "agentName" to "Aki",
             "description" to "test description",
+            "memberKind" to "agent",
             "aliases" to "Aki,秋",
             "model" to "aki/deepseek-flash",
             "reasoning" to "high",

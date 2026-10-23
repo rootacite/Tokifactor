@@ -6,9 +6,15 @@ import com.acite.tokifactor.appMqttProbesFile
 import com.acite.tokifactor.defaultDisplayName
 import com.acite.tokifactor.model.AppearanceIds
 import com.acite.tokifactor.model.CustomBrokerParse
+import com.acite.tokifactor.model.MAX_MEMBER_DESCRIPTION_UNITS
+import com.acite.tokifactor.model.isMemberId
+import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
+import com.acite.tokifactor.model.memberDescriptionWeight
+import com.acite.tokifactor.model.newMemberId
+import com.acite.tokifactor.model.truncateMemberDescription
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
@@ -24,9 +30,11 @@ class SettingsStore @Inject constructor() {
         const val DEFAULT_FONT_SCALE = 1f
         const val MIN_FONT_SCALE = 0.8f
         const val MAX_FONT_SCALE = 1.6f
+        const val MAX_BIO_WEIGHT = MAX_MEMBER_DESCRIPTION_UNITS
         const val DEFAULT_APPEARANCE_ID = AppearanceIds.Default
         private const val KEY_MAGIC = "magicString"
         private const val KEY_DISPLAY_NAME = "displayName"
+        private const val KEY_BIO = "bio"
         private const val KEY_FONT_SCALE = "fontScale"
         private const val KEY_APPEARANCE = "appearanceId"
         private const val KEY_MQTT_BROKER = "mqttBrokerId"
@@ -36,12 +44,17 @@ class SettingsStore @Inject constructor() {
         private const val KEY_CUSTOM_USERNAME = "mqttCustomUsername"
         private const val KEY_CUSTOM_PASSWORD = "mqttCustomPassword"
         private const val KEY_DEVICE_ID = "deviceId"
+        private const val KEY_MEMBER_ID = "memberId"
+        private const val KEY_IDENTITY_BOUND = "identityBound"
     }
 
     var magicString: String = DEFAULT_MAGIC_STRING
         private set
 
     var displayName: String = defaultDisplayName()
+        private set
+
+    var bio: String = ""
         private set
 
     var fontScale: Float = DEFAULT_FONT_SCALE
@@ -69,6 +82,12 @@ class SettingsStore @Inject constructor() {
         private set
 
     var deviceId: String = ""
+        private set
+
+    var memberId: String = ""
+        private set
+
+    var identityBound: Boolean = false
         private set
 
     val mqttBroker: MqttBroker
@@ -114,6 +133,7 @@ class SettingsStore @Inject constructor() {
         }
         magicString = parsed[KEY_MAGIC]?.ifBlank { null } ?: DEFAULT_MAGIC_STRING
         displayName = parsed[KEY_DISPLAY_NAME]?.ifBlank { null } ?: defaultDisplayName()
+        bio = truncateMemberDescription(parsed[KEY_BIO].orEmpty())
         fontScale = parsed[KEY_FONT_SCALE]
             ?.toFloatOrNull()
             ?.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
@@ -132,13 +152,23 @@ class SettingsStore @Inject constructor() {
         }
         val customWasUnusable = mqttBrokerId == MqttBrokers.CUSTOM_ID && customBroker() == null
         if (customWasUnusable) mqttBrokerId = MqttBrokers.DEFAULT_ID
-        deviceId = parsed[KEY_DEVICE_ID]?.ifBlank { null } ?: UUID.randomUUID().toString()
+        val storedDeviceId = parsed[KEY_DEVICE_ID]?.ifBlank { null }
+        val existingInstall = storedDeviceId != null
+        deviceId = storedDeviceId ?: UUID.randomUUID().toString()
+        val storedMemberId = parsed[KEY_MEMBER_ID]?.trim().orEmpty()
+        memberId = storedMemberId.takeIf(::isMemberId)
+            ?: if (existingInstall) legacyMemberId(displayName) else newMemberId()
+        identityBound = parsed[KEY_IDENTITY_BOUND]
+            ?.toBooleanStrictOrNull()
+            ?: existingInstall
         avatarBytes = loadAvatar()
         mqttProbes = loadMqttProbes()
         if (!file.exists() ||
             parsed[KEY_DISPLAY_NAME].isNullOrBlank() ||
             parsed[KEY_MQTT_BROKER].isNullOrBlank() ||
             parsed[KEY_DEVICE_ID].isNullOrBlank() ||
+            parsed[KEY_MEMBER_ID].isNullOrBlank() ||
+            !isMemberId(memberId) ||
             customWasUnusable
         ) {
             persist()
@@ -151,9 +181,25 @@ class SettingsStore @Inject constructor() {
     }
 
     fun updateDisplayName(value: String) {
-        displayName = value.ifBlank { defaultDisplayName() }
+        displayName = value.trim().ifBlank { defaultDisplayName() }
         persist()
     }
+
+    @Synchronized
+    fun applyIdentity(name: String, id: String, bound: Boolean = true) {
+        if (!isMemberId(id)) throw IllegalArgumentException("invalid member id: $id")
+        displayName = name.trim().ifBlank { defaultDisplayName() }
+        memberId = id
+        identityBound = bound
+        persist()
+    }
+
+    fun updateBio(value: String) {
+        bio = truncateMemberDescription(value)
+        persist()
+    }
+
+    fun bioWeight(value: String = bio): Int = memberDescriptionWeight(value)
 
     fun updateFontScale(value: Float) {
         fontScale = value.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE)
@@ -276,6 +322,7 @@ class SettingsStore @Inject constructor() {
         val body =
             "$KEY_MAGIC = \"${escapeTomlString(magicString)}\"\n" +
                 "$KEY_DISPLAY_NAME = \"${escapeTomlString(displayName)}\"\n" +
+                "$KEY_BIO = \"${escapeTomlString(bio)}\"\n" +
                 "$KEY_FONT_SCALE = \"${fontScale}\"\n" +
                 "$KEY_APPEARANCE = \"${escapeTomlString(appearanceId)}\"\n" +
                 "$KEY_MQTT_BROKER = \"${escapeTomlString(mqttBrokerId)}\"\n" +
@@ -284,7 +331,9 @@ class SettingsStore @Inject constructor() {
                 "$KEY_CUSTOM_TLS = \"${mqttCustomTls}\"\n" +
                 "$KEY_CUSTOM_USERNAME = \"${escapeTomlString(mqttCustomUsername)}\"\n" +
                 "$KEY_CUSTOM_PASSWORD = \"${escapeTomlString(mqttCustomPassword)}\"\n" +
-                "$KEY_DEVICE_ID = \"${escapeTomlString(deviceId)}\"\n"
+                "$KEY_DEVICE_ID = \"${escapeTomlString(deviceId)}\"\n" +
+                "$KEY_MEMBER_ID = \"${escapeTomlString(memberId)}\"\n" +
+                "$KEY_IDENTITY_BOUND = \"$identityBound\"\n"
         val tmp = File(requireNotNull(file.parentFile), "${file.name}.tmp")
         tmp.writeText(body)
         if (!tmp.renameTo(file)) {

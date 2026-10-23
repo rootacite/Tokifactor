@@ -2,6 +2,7 @@ package com.acite.tokifactor.daemon
 
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.services.ChatEngineEvent
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -25,8 +26,10 @@ class DaemonProtocolTest {
         )
         val member = AgentStatus(
             present = true,
-            agentId = "aki",
-            agentName = "Aki",
+            memberId = "aki",
+            memberName = "Aki",
+            description = "Aki bio",
+            memberKind = "agent",
             queueDepth = 2,
         )
         val frame = DaemonServerFrame(
@@ -91,5 +94,19 @@ class DaemonProtocolTest {
         assertEquals(DaemonProtocol.EVENT_PEER_AVATAR, avatar?.kind)
         assertEquals("alice", avatar?.peerId)
         assertContentEquals(byteArrayOf(9), Base64.decode(avatar?.peerAvatar.orEmpty()))
+    }
+
+    @Test
+    fun legacyDaemonMemberKeepsAgentIdButMigratesToMemberId() {
+        val legacy = WireAgentStatus(
+            present = true,
+            agentId = "aki",
+            agentName = "Aki",
+        )
+
+        val member = legacy.toAgentStatus()
+
+        assertEquals(legacyMemberId("Aki"), member.memberId)
+        assertEquals("Aki", member.memberName)
     }
 }

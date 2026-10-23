@@ -15,12 +15,16 @@ interface ChatSession {
     val members: List<AgentStatus>
     val selectedAgentId: String?
     val deviceId: String
+    val memberId: String
+    val displayName: String
+    val bio: String
     val peerAvatars: Map<String, ByteArray>
     val connectionStatus: StateFlow<String>
     val inboundNotices: SharedFlow<InboundNotice>
 
     fun start()
     fun refreshSettings()
+    fun findMember(name: String): AgentStatus?
     fun selectAgent(agentId: String)
     fun addMessage(content: String, isError: Boolean = false)
     fun removeMessage(id: String)

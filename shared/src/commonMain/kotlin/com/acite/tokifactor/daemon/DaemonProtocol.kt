@@ -123,9 +123,13 @@ data class WireChatMessage(
 data class WireAgentStatus(
     val present: Boolean = false,
     val lastSeenAt: Long = 0L,
+    val memberId: String = "",
+    val memberName: String = "",
+    // Legacy wire fields; still emitted for older daemons and UI builds.
     val agentId: String = "",
     val agentName: String = "",
     val description: String = "",
+    val memberKind: String = "agent",
     val aliases: String = "",
     val model: String = "",
     val reasoning: String = "",
@@ -249,9 +253,12 @@ fun WireChatMessage.toChatMessage(): ChatMessage = ChatMessage(
 fun AgentStatus.toWire(): WireAgentStatus = WireAgentStatus(
     present = present,
     lastSeenAt = lastSeenAt,
-    agentId = agentId,
-    agentName = agentName,
+    memberId = memberId,
+    memberName = memberName,
+    agentId = memberId,
+    agentName = memberName,
     description = description,
+    memberKind = memberKind,
     aliases = aliases,
     model = model,
     reasoning = reasoning,
@@ -270,9 +277,16 @@ fun AgentStatus.toWire(): WireAgentStatus = WireAgentStatus(
 fun WireAgentStatus.toAgentStatus(): AgentStatus = AgentStatus(
     present = present,
     lastSeenAt = lastSeenAt,
-    agentId = agentId,
-    agentName = agentName,
+    memberId = memberId.ifBlank {
+        if (agentId.startsWith("mem_") || agentId.startsWith("legacy_")) {
+            agentId
+        } else {
+            com.acite.tokifactor.model.legacyMemberId(agentName.ifBlank { agentId })
+        }
+    },
+    memberName = memberName.ifBlank { agentName },
     description = description,
+    memberKind = memberKind,
     aliases = aliases,
     model = model,
     reasoning = reasoning,

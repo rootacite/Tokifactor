@@ -65,6 +65,7 @@ import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
 import com.acite.tokifactor.services.SettingsStore
+import com.acite.tokifactor.model.memberDescriptionWeight
 import com.acite.tokifactor.ui.theme.Appearance
 import com.acite.tokifactor.ui.theme.TokiCapsuleButton
 import com.acite.tokifactor.ui.theme.TokiChoiceRow
@@ -158,7 +159,10 @@ fun SettingPage(
             }
         }
 
-        TokiSection(title = "Profile", hint = "Shown next to your messages on this device.") {
+        TokiSection(
+            title = "Profile",
+            hint = "Your name and introduction are visible to everyone in this channel.",
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -219,10 +223,33 @@ fun SettingPage(
             }
             OutlinedTextField(
                 value = viewModel.displayName,
-                onValueChange = { viewModel.displayName = it },
+                onValueChange = viewModel::onDisplayNameChange,
                 label = { Text("Display name") },
-                supportingText = { Text("Blank restores the device name.") },
+                supportingText = {
+                    Text("Blank restores the device name. Renaming keeps the member id and preserves old names as aliases.")
+                },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = tokiTextFieldColors(),
+            )
+            viewModel.nameResolution?.let { resolution ->
+                Text(
+                    text = resolution,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.accentBlue,
+                )
+            }
+            OutlinedTextField(
+                value = viewModel.bio,
+                onValueChange = viewModel::onBioChange,
+                label = { Text("Introduction") },
+                placeholder = { Text("A short introduction for this channel") },
+                supportingText = {
+                    Text("${memberDescriptionWeight(viewModel.bio)}/${SettingsStore.MAX_BIO_WEIGHT} · visible to everyone in this channel")
+                },
+                minLines = 3,
+                maxLines = 6,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
                 colors = tokiTextFieldColors(),
@@ -273,6 +300,30 @@ fun SettingPage(
                 )
             }
         }
+    }
+
+    viewModel.pendingIdentitySwitch?.let { target ->
+        AlertDialog(
+            onDismissRequest = viewModel::cancelIdentitySwitch,
+            title = { Text("Switch identity?") },
+            text = {
+                Text(
+                    "“${target.memberName}” already belongs to another identity. " +
+                        "Switching adopts its member id and profile. Messages you sent " +
+                        "under the current identity stay with it and will no longer appear as yours."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.confirmIdentitySwitch() }) {
+                    Text("Switch identity")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::cancelIdentitySwitch) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 
     if (clearStep == 1) {

@@ -7,9 +7,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.acite.tokifactor.copyFileToPlatformFile
 import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.InboundNotice
+import com.acite.tokifactor.model.canonicalMemberName
+import com.acite.tokifactor.model.isMemberId
+import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.selectedMember
+import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.services.ChatHistoryStore
 import com.acite.tokifactor.services.ChatSession
 import com.acite.tokifactor.services.SettingsStore
@@ -78,13 +83,26 @@ class DaemonChatSession @Inject constructor(
     override val members: List<AgentStatus>
         get() = memberStates.values
             .filter { it.present }
-            .sortedWith(compareBy<AgentStatus>({ it.agentId != "aki" }, { it.agentName.lowercase() }, { it.agentId }))
+            .sortedWith(compareBy<AgentStatus>(
+                { it.memberName.lowercase() != "aki" && !it.aliasList().any { alias -> alias.lowercase() == "aki" } },
+                { it.memberName.lowercase() },
+                { it.memberId },
+            ))
 
     override val agentStatus: AgentStatus
         get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
 
     override val deviceId: String
         get() = settingsStore.deviceId
+
+    override val memberId: String
+        get() = settingsStore.memberId
+
+    override val displayName: String
+        get() = settingsStore.displayName
+
+    override val bio: String
+        get() = settingsStore.bio
 
     override val peerAvatars = mutableStateMapOf<String, ByteArray>()
 
@@ -116,6 +134,13 @@ class DaemonChatSession @Inject constructor(
             }
             withContext(Dispatchers.Main) {
                 if (messages.isEmpty()) messages.addAll(local)
+                if (messages.isNotEmpty()) {
+                    val normalized = messages.map(::normalizeMessage)
+                    if (normalized != messages) {
+                        messages.clear()
+                        messages.addAll(normalized)
+                    }
+                }
             }
             connectLoop()
         }
@@ -242,18 +267,21 @@ class DaemonChatSession @Inject constructor(
 
     private suspend fun applySnapshot(snapshotRevision: Long, snapshot: DaemonSnapshot) {
         revision = snapshotRevision
-        val messagesSnapshot = snapshot.messages.map { it.toChatMessage() }
+        val messagesSnapshot = snapshot.messages.map { normalizeMessage(it.toChatMessage()) }
         val membersSnapshot = snapshot.members.map { it.toAgentStatus() }
-        val avatars = snapshot.peerAvatars.mapValues { (_, value) -> decodeAvatar(value) }
-            .filterValues { it != null }
-            .mapValues { it.value!! }
+        val avatars = buildMap {
+            snapshot.peerAvatars.forEach { (key, value) ->
+                val bytes = decodeAvatar(value) ?: return@forEach
+                put(normalizeMemberId(key, key), bytes)
+            }
+        }
         withContext(Dispatchers.Main) {
             messages.clear()
             messages.addAll(messagesSnapshot)
             connected = snapshot.connected
             _connectionStatus.value = snapshot.status
             memberStates.clear()
-            membersSnapshot.forEach { memberStates[it.agentId] = it }
+            membersSnapshot.forEach { memberStates[it.memberId] = it }
             peerAvatars.clear()
             peerAvatars.putAll(avatars)
         }
@@ -263,7 +291,8 @@ class DaemonChatSession @Inject constructor(
         withContext(Dispatchers.Main) {
             when (event.kind) {
                 DaemonProtocol.EVENT_MESSAGE_UPSERT -> {
-                    val message = event.message?.toChatMessage() ?: return@withContext
+                    val message = event.message?.toChatMessage()?.let(::normalizeMessage)
+                        ?: return@withContext
                     val existing = messages.indexOfFirst { it.id == message.id }
                     if (existing >= 0) {
                         messages[existing] = message
@@ -282,14 +311,15 @@ class DaemonChatSession @Inject constructor(
                 }
                 DaemonProtocol.EVENT_MEMBERS -> {
                     memberStates.clear()
-                    event.members.map { it.toAgentStatus() }.forEach { memberStates[it.agentId] = it }
+                    event.members.map { it.toAgentStatus() }.forEach { memberStates[it.memberId] = it }
                     if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
                         selectedAgentId = null
                     }
                 }
                 DaemonProtocol.EVENT_PEER_AVATAR -> {
                     val bytes = decodeAvatar(event.peerAvatar)
-                    if (bytes == null) peerAvatars.remove(event.peerId) else peerAvatars[event.peerId] = bytes
+                    val memberId = normalizeMemberId(event.peerId, event.peerId)
+                    if (bytes == null) peerAvatars.remove(memberId) else peerAvatars[memberId] = bytes
                 }
             }
         }
@@ -321,6 +351,39 @@ class DaemonChatSession @Inject constructor(
         }
     }
 
+    private fun normalizeMessage(message: ChatMessage): ChatMessage {
+        val memberId = normalizeMemberId(message.sender, message.senderId)
+        val senderName = if (memberId == settingsStore.memberId) {
+            settingsStore.displayName
+        } else {
+            message.sender
+        }
+        return message.copy(
+            sender = senderName,
+            senderId = memberId,
+            isMine = memberId == settingsStore.memberId,
+            requesterId = when {
+                message.requesterId.isBlank() -> ""
+                message.requesterId == settingsStore.deviceId -> settingsStore.memberId
+                canonicalMemberName(message.requesterId) ==
+                    canonicalMemberName(settingsStore.displayName) -> settingsStore.memberId
+                isMemberId(message.requesterId) -> message.requesterId
+                else -> legacyMemberId(message.requesterId)
+            },
+        )
+    }
+
+    private fun normalizeMemberId(sender: String, senderId: String): String {
+        val key = senderId.trim()
+        return when {
+            isMemberId(key) -> key
+            key == settingsStore.deviceId -> settingsStore.memberId
+            canonicalMemberName(sender) == canonicalMemberName(settingsStore.displayName) ->
+                settingsStore.memberId
+            else -> legacyMemberId(sender.ifBlank { key })
+        }
+    }
+
     override fun refreshSettings() {
         avatarBytes = settingsStore.avatarBytes
         commandScope.launch { sendReloadSettings() }
@@ -329,6 +392,13 @@ class DaemonChatSession @Inject constructor(
     override fun selectAgent(agentId: String) {
         if (agentId.isNotBlank()) selectedAgentId = agentId
     }
+
+    override fun findMember(name: String): AgentStatus? =
+        memberStates.values.firstOrNull { member ->
+            canonicalMemberName(member.memberName) == canonicalMemberName(name) ||
+                member.memberId == name ||
+                member.aliasList().any { alias -> canonicalMemberName(alias) == canonicalMemberName(name) }
+        }
 
     override fun addMessage(content: String, isError: Boolean) {
         commandScope.launch {

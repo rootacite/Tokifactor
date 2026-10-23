@@ -49,6 +49,21 @@ object PeerAvatarStore {
         File(appPeerAvatarsDir(), key).delete()
     }
 
+    @Synchronized
+    fun migrateKey(oldId: String, memberId: String) {
+        if (oldId.isBlank() || memberId.isBlank() || oldId == memberId) return
+        val dir = appPeerAvatarsDir()
+        val old = File(dir, fileName(oldId) ?: return)
+        if (!old.isFile || old.length() <= 0L) return
+        val bytes = try {
+            old.readBytes()
+        } catch (_: Exception) {
+            return
+        }
+        save(memberId, bytes)
+        old.delete()
+    }
+
     private fun fileName(id: String): String? {
         val key = id.replace(Regex("[^A-Za-z0-9._-]"), "_")
         return key.takeIf { it.isNotEmpty() }

@@ -45,19 +45,25 @@ The channel exists for as long as clients stay connected. There is nothing to de
   bar with avatars and status dots. The second line shows the selected member's
   model, reasoning effort, context usage, queue depth, and pending approvals.
   Active work is shown in the member bar instead of the message list, and selecting
-  a member also exposes its description. Without agents, the app stays a normal
-  tokifactor chat client.
+  `Info` and every member avatar open a full member profile. Tokifactor users also
+  announce a profile, so humans and agents share the same roster. Without remote
+  members, the app stays a normal tokifactor chat client.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
+- Agent replies with multiple blank-line-separated paragraphs render as separate
+  bubbles; fenced code blocks stay intact and selection/delete still target the
+  original message.
 - Consecutive tool cards and approvals from the same turn collapse into one expandable
   group; pending approvals auto-expand so they stay actionable.
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.
-- **Display name** and **avatar** (shown next to your bubbles on the other device).
+- **Display name**, **avatar**, and channel-visible **introduction** (shown next to
+  your bubbles and on your member profile).
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
 - Four KataHana-inspired **dark appearances** (Sky & Sakura, Ink & Paper,
   Midnight & Snow, Lilac & Peach) with a lavender-glass visual system.
-- Settings, chat history, photos, and files persist locally (magic string, name,
-  broker, device id, avatar, text size, and appearance included).
+- Settings, chat history, photos, and files persist locally (magic string, immutable
+  member id, identity-bound flag, name, introduction, broker, device id, avatar, text
+  size, and appearance included).
 
 There is no iOS, Wasm, or native-mobile target. There is no backend and no user directory.
 
@@ -126,7 +132,35 @@ Images over 8 MiB are shown with the file bubble instead of an in-chat preview.
 
 ### Identity
 
-Each install gets a random `deviceId`. Display name defaults to the OS device name. Avatars are encrypted on `tokifactor/avatar` and cached per sender id on the receiver. On startup the client re-announces its own avatar and requests the current avatar for every cached peer and discovered channel member, so a peer avatar changed while the app was offline is refreshed.
+Each install keeps a local immutable `memberId` in `config.toml`. A fresh install gets
+`mem_<uuid4hex>`; an existing install migrates once to the deterministic
+`legacy_<sha256("tokifactor-member-v1\0" + NFKC(trim(lower(Name))))[:32]>`, so PC and
+Android converge on the same entity without any central server. `deviceId` remains the
+local transport/avatar source, not the channel identity. The current display Name is a
+label: `identities.json` beside the config records aliases and label ownership for this
+client only. Members are keyed by `memberId`; control messages still carry
+`agentId=memberId` and `agentName=memberName` for older clients, plus new
+`memberId`/`memberName` fields. The first source that announces an id owns its profile;
+later sources only add liveness. Text/file/image envelopes, chunk metadata, avatar ids,
+and local history use `memberId`, so messages from another same-id device render as
+your own (`isMine=true`). Avatars are encrypted on `tokifactor/avatar` and cached by
+member id. On startup old Name/device keys in history and the avatar cache are migrated,
+and the current Name from the local registry is used for display.
+
+Introductions are encrypted control metadata (`description`) alongside
+`memberKind=user` for Tokifactor clients and `memberKind=agent` for Aki gateways. A
+missing `memberKind` is treated as `agent` for older clients. Introductions allow
+newlines and are limited to 512 weighted units: ASCII counts as 1, while CJK,
+full-width characters, and emoji count as 2. That means 512 English characters or
+256 Chinese characters. Settings shows the live counter and explains that everyone
+holding the same broker and magic string can see the introduction. It is **not
+private**. Labelling your profile with a Name already owned by another member id is
+handled locally: an unbound fresh client silently adopts that member id, Name,
+introduction, aliases, and cached avatar; a bound client shows a confirmation dialog
+because old messages stay with the old id and are no longer rendered as yours.
+Renaming to a free label keeps the id and permanently retains the old Name as an alias.
+The registry is client-local and never authoritative; a conflicting remote id can stay
+online by id, but it cannot take a label from its recorded owner.
 
 ## How to use
 
@@ -134,16 +168,19 @@ Each install gets a random `deviceId`. Display name defaults to the OS device na
 2. Open **Settings** (gear on the chat bar).
 3. Set a **magic string** that is *not* the default, and share it out of band (in person, another messenger, etc.). Both sides must match **exactly**.
 4. Pick the same **MQTT broker**. Prefer TLS. Use the latency marks if one region is unreachable.
-5. Optionally set a display name, avatar, and text size.
+5. Optionally set a display name, avatar, introduction, and text size.
 6. Wait until the send and attach buttons enable (connected). Then type, or attach a photo / file.
 
-If one or more Aki gateways are listening on the same broker and magic string,
-tokifactor probes `tokifactor/control` every 15 seconds while empty and every 60
-seconds once members are present. Members are keyed by `agentId`, time out after
-30 seconds without a heartbeat, and are shown in the top member bar. The default
+If any Tokifactor client or Aki gateway is listening on the same broker and magic
+string, tokifactor probes `tokifactor/control` every 15 seconds while empty and every
+20 seconds once members are present. Members are keyed by immutable `memberId`, time
+out after 30 seconds without a heartbeat, and are shown in the top member bar. The default
 selection prefers the first `Aki` and falls back to the next online member when it
-goes offline. Configure the broker and magic manually; tokifactor does not ship an
-Aki-specific broker preset.
+goes offline. Tap a member avatar or `Info` to open its full profile; tap the chip
+text to select it for the compact status row. Your own avatar opens your profile with
+an **Edit profile** shortcut. The page keeps the member snapshot taken when it
+opened, so a transient disconnect does not blank it. Configure the broker and magic
+manually; tokifactor does not ship an Aki-specific broker preset.
 
 Peers who use a different magic string will not decrypt your traffic (and you will not see theirs). Peers who use a different broker are on a different bus.
 

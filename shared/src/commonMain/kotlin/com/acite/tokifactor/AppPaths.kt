@@ -10,6 +10,8 @@ fun appAvatarFile(): File = File(requireNotNull(appConfigFile().parentFile), "av
 
 fun appMqttProbesFile(): File = File(requireNotNull(appConfigFile().parentFile), "mqtt-probes.toml")
 
+fun appIdentitiesFile(): File = File(requireNotNull(appConfigFile().parentFile), "identities.json")
+
 fun appPeerAvatarsDir(): File = File(requireNotNull(appConfigFile().parentFile), "peer-avatars")
 
 fun appHistoryDir(): File = File(requireNotNull(appConfigFile().parentFile), "history")

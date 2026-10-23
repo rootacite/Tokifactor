@@ -82,10 +82,14 @@ import coil3.request.crossfade
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.AgentStatus
-import com.acite.tokifactor.model.aliasList
+import com.acite.tokifactor.model.MEMBER_KIND_AGENT
+import com.acite.tokifactor.model.MEMBER_KIND_USER
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
+import com.acite.tokifactor.model.memberNameKey
+import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.queueBadgeLabel
+import com.acite.tokifactor.model.recentMemberMessages
 import com.acite.tokifactor.ui.theme.TokiBubbleSurface
 import com.acite.tokifactor.ui.theme.TokiSurface
 import com.acite.tokifactor.ui.theme.tokiColors
@@ -158,8 +162,19 @@ fun ByteImage(
 private sealed class ChatDisplayItem {
     abstract val key: String
 
-    data class Single(val message: ChatMessage) : ChatDisplayItem() {
+    sealed class MessageItem : ChatDisplayItem() {
+        abstract val message: ChatMessage
+    }
+
+    data class Single(override val message: ChatMessage) : MessageItem() {
         override val key: String = "message:${message.id}"
+    }
+
+    data class AgentPart(
+        override val message: ChatMessage,
+        val index: Int,
+    ) : MessageItem() {
+        override val key: String = "agent-part:${message.id}:$index"
     }
 
     data class ToolGroup(
@@ -169,6 +184,11 @@ private sealed class ChatDisplayItem {
         override val key: String = "tools:$id"
     }
 }
+
+private data class MemberProfileTarget(
+    val member: AgentStatus,
+    val isSelf: Boolean,
+)
 
 private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplayItem> {
     val items = mutableListOf<ChatDisplayItem>()
@@ -184,7 +204,21 @@ private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplay
             continue
         }
         if (!message.isGroupableToolStep()) {
-            items += ChatDisplayItem.Single(message)
+            if (message.isAgent && message.agentKind == "turn" && message.content.isNotBlank()) {
+                val paragraphs = splitAgentParagraphs(message.content)
+                if (paragraphs.size > 1) {
+                    paragraphs.forEachIndexed { partIndex, paragraph ->
+                        items += ChatDisplayItem.AgentPart(
+                            message = message.copy(content = paragraph),
+                            index = partIndex,
+                        )
+                    }
+                } else {
+                    items += ChatDisplayItem.Single(message)
+                }
+            } else {
+                items += ChatDisplayItem.Single(message)
+            }
             index += 1
             continue
         }
@@ -209,6 +243,9 @@ private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplay
 private fun ChatMessage.isGroupableToolStep(): Boolean =
     isAgent && (agentKind == "tool" || agentKind == "approval")
 
+internal fun approvalRequesterMatches(requesterId: String, localMemberId: String): Boolean =
+    requesterId.isEmpty() || requesterId == localMemberId
+
 @Composable
 fun MainPage(
     onOpenSettings: () -> Unit,
@@ -221,7 +258,7 @@ fun MainPage(
     val selectedIds = remember { mutableStateListOf<String>() }
     var confirmDelete by remember { mutableStateOf(false) }
     var lastCount by remember { mutableIntStateOf(-1) }
-    var memberInfo by remember { mutableStateOf<AgentStatus?>(null) }
+    var profileTarget by remember { mutableStateOf<MemberProfileTarget?>(null) }
     val members = viewModel.members
     val agentStatus = viewModel.agentStatus
 
@@ -247,8 +284,43 @@ fun MainPage(
         confirmDelete = false
     }
 
+    fun openProfile(memberId: String, memberName: String, isSelf: Boolean) {
+        val now = System.currentTimeMillis()
+        val member = if (isSelf) {
+            AgentStatus(
+                present = true,
+                lastSeenAt = now,
+                memberId = viewModel.memberId,
+                memberName = viewModel.displayName,
+                description = viewModel.bio,
+                memberKind = MEMBER_KIND_USER,
+            )
+        } else {
+            viewModel.members.firstOrNull { it.memberId == memberId }
+                ?: AgentStatus(
+                    present = true,
+                    lastSeenAt = now,
+                    memberId = memberId.ifBlank { legacyMemberId(memberName) },
+                    memberName = memberName,
+                    memberKind = MEMBER_KIND_AGENT,
+                )
+        }
+        profileTarget = MemberProfileTarget(member = member, isSelf = isSelf)
+    }
+
+    fun openMessageProfile(message: ChatMessage) {
+        openProfile(
+            memberId = message.senderId.ifBlank { legacyMemberId(message.sender) },
+            memberName = message.sender,
+            isSelf = message.isMine,
+        )
+    }
+
+    fun messageAvatar(message: ChatMessage): ByteArray? =
+        viewModel.peerAvatars[message.senderId]
+
     fun displayItemIds(item: ChatDisplayItem): List<String> = when (item) {
-        is ChatDisplayItem.Single -> listOf(item.message.id)
+        is ChatDisplayItem.MessageItem -> listOf(item.message.id)
         is ChatDisplayItem.ToolGroup -> item.messages.map { it.id }
     }
 
@@ -310,8 +382,12 @@ fun MainPage(
         }
     }
 
-    OnSystemBack(enabled = selectionMode) {
-        exitSelection()
+    OnSystemBack(enabled = selectionMode || profileTarget != null) {
+        if (profileTarget != null) {
+            profileTarget = null
+        } else {
+            exitSelection()
+        }
     }
 
     val listTopPad by animateDpAsState(
@@ -363,12 +439,16 @@ fun MainPage(
                                 expandedToolGroups[item.id] = expanded
                             },
                             connected = viewModel.connected,
-                            localDeviceId = viewModel.deviceId,
+                            localMemberId = viewModel.memberId,
                             onApprovalRespond = { approvalId, allow ->
                                 viewModel.respondToApproval(approvalId, allow)
                             },
+                            onAvatarClick = {
+                                val message = item.messages.first()
+                                openMessageProfile(message)
+                            },
                         )
-                        is ChatDisplayItem.Single -> {
+                        is ChatDisplayItem.MessageItem -> {
                             val message = item.message
                             when {
                                 message.isSystem -> SystemChip(message = message)
@@ -376,23 +456,37 @@ fun MainPage(
                                     "approval" -> AgentApprovalCard(
                                         message = message,
                                         connected = viewModel.connected,
-                                        localDeviceId = viewModel.deviceId,
+                                        localMemberId = viewModel.memberId,
                                         onRespond = { allow ->
                                             viewModel.respondToApproval(message.approvalId, allow)
                                         },
+                                        onAvatarClick = {
+                                            openMessageProfile(message)
+                                        },
                                     )
-                                    "tool" -> AgentToolCard(message = message)
+                                    "tool" -> AgentToolCard(
+                                        message = message,
+                                        onAvatarClick = {
+                                            openMessageProfile(message)
+                                        },
+                                    )
                                     "error" -> SystemChip(message = message)
                                     else -> AgentTextBubble(
                                         message = message,
                                         mineAvatar = viewModel.avatarBytes,
-                                        peerAvatar = viewModel.peerAvatars[message.senderId],
+                                        peerAvatar = messageAvatar(message),
+                                        onAvatarClick = {
+                                            openMessageProfile(message)
+                                        },
                                     )
                                 }
                                 message.isFile -> FileBubble(
                                     message = message,
                                     mineAvatar = viewModel.avatarBytes,
-                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    peerAvatar = messageAvatar(message),
+                                    onAvatarClick = {
+                                        openMessageProfile(message)
+                                    },
                                     onSaveTo = { dest -> viewModel.saveMessageFile(message, dest) },
                                     onCancel = if (message.isMine && message.isTransferring) {
                                         { viewModel.cancelOutgoing(message.id) }
@@ -403,7 +497,10 @@ fun MainPage(
                                 message.isImage -> ImageBubble(
                                     message = message,
                                     mineAvatar = viewModel.avatarBytes,
-                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    peerAvatar = messageAvatar(message),
+                                    onAvatarClick = {
+                                        openMessageProfile(message)
+                                    },
                                     onCancel = if (message.isMine && message.isTransferring) {
                                         { viewModel.cancelOutgoing(message.id) }
                                     } else {
@@ -413,7 +510,10 @@ fun MainPage(
                                 else -> TextBubble(
                                     message = message,
                                     mineAvatar = viewModel.avatarBytes,
-                                    peerAvatar = viewModel.peerAvatars[message.senderId],
+                                    peerAvatar = messageAvatar(message),
+                                    onAvatarClick = {
+                                        openMessageProfile(message)
+                                    },
                                     onCancel = if (message.isMine && message.isTransferring) {
                                         { viewModel.cancelOutgoing(message.id) }
                                     } else {
@@ -488,7 +588,9 @@ fun MainPage(
                 members = members,
                 avatars = viewModel.peerAvatars,
                 onSelect = viewModel::selectAgent,
-                onShowInfo = { memberInfo = it },
+                onShowInfo = { member ->
+                    profileTarget = MemberProfileTarget(member = member, isSelf = false)
+                },
             )
         }
 
@@ -582,6 +684,31 @@ fun MainPage(
                 }
             }
         }
+
+        profileTarget?.let { target ->
+            MemberProfilePage(
+                member = target.member,
+                avatar = if (target.isSelf) {
+                    viewModel.avatarBytes
+                } else {
+                    viewModel.peerAvatars[target.member.agentId]
+                },
+                isSelf = target.isSelf,
+                recentMessages = recentMemberMessages(
+                    viewModel.messages,
+                    target.member.agentId,
+                ),
+                onBack = { profileTarget = null },
+                onEditProfile = if (target.isSelf) {
+                    {
+                        profileTarget = null
+                        onOpenSettings()
+                    }
+                } else {
+                    null
+                },
+            )
+        }
     }
 
     if (confirmDelete) {
@@ -608,27 +735,6 @@ fun MainPage(
         )
     }
 
-    memberInfo?.let { member ->
-        AlertDialog(
-            onDismissRequest = { memberInfo = null },
-            title = { Text(member.agentName.ifBlank { member.agentId }) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("ID: ${member.agentId}", style = MaterialTheme.typography.labelMedium)
-                    if (member.aliases.isNotBlank()) {
-                        Text("Aliases: ${member.aliasList().joinToString(", ")}")
-                    }
-                    Text(
-                        if (member.description.isBlank()) "No description." else member.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { memberInfo = null }) { Text("Close") }
-            },
-        )
-    }
 }
 
 private enum class MenuAction { File, Photo, Settings }
@@ -678,14 +784,14 @@ private fun AkiStatusBar(
                             member = member,
                             avatar = avatars[member.agentId],
                             selected = member.agentId == status.agentId,
-                            onClick = { onSelect(member.agentId) },
+                            onSelect = { onSelect(member.agentId) },
+                            onShowProfile = { onShowInfo(member) },
                         )
                     }
                 }
                 if (status.agentId.isNotBlank()) {
                     IconButton(
                         onClick = { onShowInfo(status) },
-                        enabled = status.description.isNotBlank(),
                         modifier = Modifier.size(28.dp),
                     ) {
                         Icon(
@@ -757,65 +863,73 @@ private fun MemberChip(
     member: AgentStatus,
     avatar: ByteArray?,
     selected: Boolean,
-    onClick: () -> Unit,
+    onSelect: () -> Unit,
+    onShowProfile: () -> Unit,
 ) {
     val colors = tokiColors
     TokiSurface(
         shape = RoundedCornerShape(50),
         color = if (selected) colors.accentPink.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.045f),
         borderColor = if (selected) colors.accentPink.copy(alpha = 0.34f) else colors.stroke.copy(alpha = 0.44f),
-        modifier = Modifier.clickable(onClick = onClick),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
         ) {
-            if (avatar != null) {
-                ByteImage(
-                    imageBytes = avatar,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clip(CircleShape),
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(20.dp)
-                        .clip(CircleShape)
-                        .background(colors.accentBlue.copy(alpha = 0.24f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                        tint = colors.accentBlue,
+            Box(modifier = Modifier.clickable(onClick = onShowProfile)) {
+                if (avatar != null) {
+                    ByteImage(
+                        imageBytes = avatar,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape),
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clip(CircleShape)
+                            .background(colors.accentBlue.copy(alpha = 0.24f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Open ${member.agentName} profile",
+                            modifier = Modifier.size(13.dp),
+                            tint = colors.accentBlue,
+                        )
+                    }
                 }
             }
-            Text(
-                text = member.agentName.ifBlank { member.agentId },
-                style = MaterialTheme.typography.labelMedium,
-                color = if (selected) colors.text else colors.textDim,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
-            )
-            if (member.activeTurn) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(10.dp),
-                    strokeWidth = 1.5.dp,
-                    color = colors.accentPink,
+            Row(
+                modifier = Modifier.clickable(onClick = onSelect),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = member.agentName.ifBlank { member.agentId },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (selected) colors.text else colors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 110.dp),
                 )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(memberDotColor(member)),
-                )
+                if (member.activeTurn) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(10.dp),
+                        strokeWidth = 1.5.dp,
+                        color = colors.accentPink,
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(memberDotColor(member)),
+                    )
+                }
             }
         }
     }
@@ -852,6 +966,7 @@ private fun WorkingPill() {
 @Composable
 private fun memberDotColor(member: AgentStatus): Color {
     val colors = tokiColors
+    if (member.isUser) return colors.qualityGreen
     val attention = member.pendingApprovals > 0
     val working = member.activeTurn || member.queueDepth > 0
     return when {
@@ -1414,13 +1529,16 @@ private fun AgentTextBubble(
     message: ChatMessage,
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
+    onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = mineAvatar,
         peerAvatar = peerAvatar,
+        onAvatarClick = onAvatarClick,
     ) {
         TokiBubbleSurface(
             isMine = false,
@@ -1444,13 +1562,18 @@ private fun AgentTextBubble(
 }
 
 @Composable
-private fun AgentToolCard(message: ChatMessage) {
+private fun AgentToolCard(
+    message: ChatMessage,
+    onAvatarClick: (() -> Unit)? = null,
+) {
     val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = null,
         peerAvatar = null,
+        onAvatarClick = onAvatarClick,
     ) {
         TokiSurface(
             shape = RoundedCornerShape(16.dp),
@@ -1476,8 +1599,9 @@ private fun AgentToolGroupCard(
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
     connected: Boolean,
-    localDeviceId: String,
+    localMemberId: String,
     onApprovalRespond: (String, Boolean) -> Unit,
+    onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
     val toolMessages = messages.filter { it.agentKind == "tool" }
@@ -1532,8 +1656,10 @@ private fun AgentToolGroupCard(
     ChatRow(
         isMine = false,
         sender = messages.first().sender,
+        senderId = messages.first().senderId,
         mineAvatar = null,
         peerAvatar = null,
+        onAvatarClick = onAvatarClick,
     ) {
         TokiSurface(
             shape = RoundedCornerShape(18.dp),
@@ -1636,7 +1762,7 @@ private fun AgentToolGroupCard(
                                     AgentApprovalContent(
                                         message = message,
                                         connected = connected,
-                                        localDeviceId = localDeviceId,
+                                        localMemberId = localMemberId,
                                         onRespond = { allow ->
                                             onApprovalRespond(message.approvalId, allow)
                                         },
@@ -1724,15 +1850,18 @@ private fun AgentToolRow(
 private fun AgentApprovalCard(
     message: ChatMessage,
     connected: Boolean,
-    localDeviceId: String,
+    localMemberId: String,
     onRespond: (Boolean) -> Unit,
+    onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
     ChatRow(
         isMine = false,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = null,
         peerAvatar = null,
+        onAvatarClick = onAvatarClick,
     ) {
         TokiSurface(
             shape = RoundedCornerShape(18.dp),
@@ -1746,7 +1875,7 @@ private fun AgentApprovalCard(
             AgentApprovalContent(
                 message = message,
                 connected = connected,
-                localDeviceId = localDeviceId,
+                localMemberId = localMemberId,
                 onRespond = onRespond,
                 modifier = Modifier.padding(12.dp),
                 contentColor = approvalContentColor(message.status),
@@ -1759,13 +1888,13 @@ private fun AgentApprovalCard(
 private fun AgentApprovalContent(
     message: ChatMessage,
     connected: Boolean,
-    localDeviceId: String,
+    localMemberId: String,
     onRespond: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
 ) {
     var expanded by remember(message.approvalId) { mutableStateOf(false) }
-    val isRequester = message.requesterId.isEmpty() || message.requesterId == localDeviceId
+    val isRequester = approvalRequesterMatches(message.requesterId, localMemberId)
     val canAct = connected && isRequester && message.status == "pending"
     val statusLabel = when (message.status) {
         "pending" -> "Waiting for approval"
@@ -1899,8 +2028,17 @@ private fun LetterAvatar(name: String) {
 }
 
 @Composable
-private fun UserAvatar(name: String, photo: ByteArray?) {
+private fun UserAvatar(
+    name: String,
+    photo: ByteArray?,
+    onClick: (() -> Unit)? = null,
+) {
     val colors = tokiColors
+    val clickable = if (onClick != null) {
+        Modifier.clickable(onClick = onClick)
+    } else {
+        Modifier
+    }
     if (photo != null) {
         Box(
             modifier = Modifier
@@ -1908,7 +2046,8 @@ private fun UserAvatar(name: String, photo: ByteArray?) {
                 .clip(CircleShape)
                 .background(colors.bgCard)
                 .border(1.dp, colors.accentLilac.copy(alpha = 0.42f), CircleShape)
-                .padding(2.dp),
+                .padding(2.dp)
+                .then(clickable),
         ) {
             ByteImage(
                 imageBytes = photo,
@@ -1919,7 +2058,9 @@ private fun UserAvatar(name: String, photo: ByteArray?) {
             )
         }
     } else {
-        LetterAvatar(name)
+        Box(modifier = clickable) {
+            LetterAvatar(name)
+        }
     }
 }
 
@@ -1934,8 +2075,10 @@ private fun bubbleShape(isMine: Boolean) = RoundedCornerShape(
 private fun ChatRow(
     isMine: Boolean,
     sender: String,
+    senderId: String = "",
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
+    onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
@@ -1952,9 +2095,9 @@ private fun ChatRow(
                 content = content
             )
             Spacer(modifier = Modifier.width(8.dp))
-            UserAvatar(name = sender, photo = mineAvatar)
+            UserAvatar(name = sender, photo = mineAvatar, onClick = onAvatarClick)
         } else {
-            UserAvatar(name = sender, photo = peerAvatar)
+            UserAvatar(name = sender, photo = peerAvatar, onClick = onAvatarClick)
             Spacer(modifier = Modifier.width(8.dp))
             Column(
                 modifier = Modifier.weight(0.78f, fill = false),
@@ -1978,6 +2121,7 @@ fun TextBubble(
     message: ChatMessage,
     mineAvatar: ByteArray? = null,
     peerAvatar: ByteArray? = null,
+    onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onCancel: (() -> Unit)? = null,
 ) {
@@ -1997,8 +2141,10 @@ fun TextBubble(
     ChatRow(
         isMine = isMine,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = mineAvatar,
         peerAvatar = peerAvatar,
+        onAvatarClick = onAvatarClick,
         modifier = modifier,
     ) {
         TokiBubbleSurface(
@@ -2192,6 +2338,7 @@ fun ImageBubble(
     message: ChatMessage,
     mineAvatar: ByteArray? = null,
     peerAvatar: ByteArray? = null,
+    onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onCancel: (() -> Unit)? = null,
 ) {
@@ -2205,8 +2352,10 @@ fun ImageBubble(
     ChatRow(
         isMine = message.isMine,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = mineAvatar,
         peerAvatar = peerAvatar,
+        onAvatarClick = onAvatarClick,
         modifier = modifier,
     ) {
         TokiBubbleSurface(
@@ -2367,6 +2516,7 @@ fun FileBubble(
     message: ChatMessage,
     mineAvatar: ByteArray? = null,
     peerAvatar: ByteArray? = null,
+    onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onSaveTo: (PlatformFile) -> Unit = {},
     onCancel: (() -> Unit)? = null,
@@ -2382,8 +2532,10 @@ fun FileBubble(
     ChatRow(
         isMine = isMine,
         sender = message.sender,
+        senderId = message.senderId,
         mineAvatar = mineAvatar,
         peerAvatar = peerAvatar,
+        onAvatarClick = onAvatarClick,
         modifier = modifier,
     ) {
         TokiBubbleSurface(

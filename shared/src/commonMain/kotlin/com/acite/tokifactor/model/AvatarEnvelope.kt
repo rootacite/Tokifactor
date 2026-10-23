@@ -5,20 +5,22 @@ data class AvatarEnvelope(
     val id: String,
     val hash: String,
     val data: String = "",
+    val source: String = "",
 ) {
     fun encode(): String = WireJson.encodeObject(
         "type" to type,
         "id" to id,
         "hash" to hash,
         "data" to data,
+        "source" to source,
     )
 
     companion object {
         const val HAVE = "have"
         const val WANT = "want"
 
-        fun have(id: String, hash: String, data: String): AvatarEnvelope =
-            AvatarEnvelope(type = HAVE, id = id, hash = hash, data = data)
+        fun have(id: String, hash: String, data: String, source: String = ""): AvatarEnvelope =
+            AvatarEnvelope(type = HAVE, id = id, hash = hash, data = data, source = source)
 
         fun want(id: String, hash: String): AvatarEnvelope =
             AvatarEnvelope(type = WANT, id = id, hash = hash)
@@ -30,7 +32,8 @@ data class AvatarEnvelope(
             if (type != HAVE && type != WANT) return null
             val hash = WireJson.extractString(payload, "hash") ?: ""
             val data = WireJson.extractString(payload, "data") ?: ""
-            return AvatarEnvelope(type = type, id = id, hash = hash, data = data)
+            val source = WireJson.extractString(payload, "source") ?: ""
+            return AvatarEnvelope(type = type, id = id, hash = hash, data = data, source = source)
         }
     }
 }

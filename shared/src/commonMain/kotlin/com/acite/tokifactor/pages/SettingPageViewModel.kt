@@ -10,7 +10,17 @@ import androidx.lifecycle.viewModelScope
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
+import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.aliasList
+import com.acite.tokifactor.model.MemberIdentity
+import com.acite.tokifactor.model.MEMBER_KIND_USER
+import com.acite.tokifactor.model.canonicalMemberName
+import com.acite.tokifactor.model.legacyMemberId
+import com.acite.tokifactor.model.truncateMemberDescription
+import com.acite.tokifactor.defaultDisplayName
 import com.acite.tokifactor.services.ChatSession
+import com.acite.tokifactor.services.IdentityLabelConflict
+import com.acite.tokifactor.services.MemberIdentityRegistry
 import com.acite.tokifactor.services.MqttService
 import com.acite.tokifactor.services.SettingsStore
 import dev.zacsweers.metro.AppScope
@@ -34,11 +44,20 @@ class SettingPageViewModel(
     private val settingsStore: SettingsStore,
     private val mqttService: MqttService,
     private val chatEngine: ChatSession,
+    private val identityRegistry: MemberIdentityRegistry,
 ) : ViewModel() {
 
     var magicString by mutableStateOf(settingsStore.magicString)
 
     var displayName by mutableStateOf(settingsStore.displayName)
+
+    var nameResolution by mutableStateOf<String?>(null)
+        private set
+
+    var pendingIdentitySwitch by mutableStateOf<AgentStatus?>(null)
+        private set
+
+    var bio by mutableStateOf(settingsStore.bio)
 
     var fontScale by mutableFloatStateOf(settingsStore.fontScale)
 
@@ -90,6 +109,7 @@ class SettingPageViewModel(
     fun reload() {
         magicString = settingsStore.magicString
         displayName = settingsStore.displayName
+        bio = settingsStore.bio
         fontScale = settingsStore.fontScale
         appearanceId = settingsStore.appearanceId
         selectedBrokerId = settingsStore.mqttBrokerId
@@ -100,6 +120,8 @@ class SettingPageViewModel(
         customPassword = settingsStore.mqttCustomPassword
         avatarBytes = settingsStore.avatarBytes
         avatarError = null
+        nameResolution = null
+        pendingIdentitySwitch = null
         syncCustomProbeDisplay()
     }
 
@@ -154,6 +176,16 @@ class SettingPageViewModel(
     fun clearAvatar() {
         avatarBytes = null
         avatarError = null
+    }
+
+    fun onDisplayNameChange(value: String) {
+        displayName = value
+        nameResolution = null
+        pendingIdentitySwitch = null
+    }
+
+    fun onBioChange(value: String) {
+        bio = truncateMemberDescription(value)
     }
 
     fun pickAvatar(file: PlatformFile) {
@@ -225,8 +257,9 @@ class SettingPageViewModel(
 
     /** Persists the form. Returns false when a custom broker was chosen but the address is invalid. */
     fun save(): Boolean {
+        if (!applyIdentityChoice()) return false
         settingsStore.updateMagicString(magicString)
-        settingsStore.updateDisplayName(displayName)
+        settingsStore.updateBio(bio)
         settingsStore.updateFontScale(fontScale)
         settingsStore.updateAppearanceId(appearanceId)
         settingsStore.updateAvatar(avatarBytes)
@@ -254,8 +287,119 @@ class SettingPageViewModel(
             customProbeSnapshot = null
             customProbeKey = null
         }
+        val resolution = nameResolution
         reload()
+        nameResolution = resolution
+        chatEngine.refreshSettings()
         return true
+    }
+
+    fun confirmIdentitySwitch(): Boolean {
+        val target = pendingIdentitySwitch ?: return save()
+        pendingIdentitySwitch = null
+        adoptIdentity(target)
+        val saved = save()
+        if (saved) nameResolution = "Switched to ${target.memberName}."
+        return saved
+    }
+
+    fun cancelIdentitySwitch() {
+        pendingIdentitySwitch = null
+        displayName = settingsStore.displayName
+    }
+
+    private fun applyIdentityChoice(): Boolean {
+        val requested = displayName.trim().ifBlank { defaultDisplayName() }
+        val currentId = settingsStore.memberId
+        val currentName = settingsStore.displayName
+        val member = chatEngine.findMember(requested)
+        var ownerId = identityRegistry.resolve(requested)
+        if (ownerId.isBlank()) ownerId = member?.memberId.orEmpty()
+        if (ownerId.isNotBlank() && ownerId != currentId) {
+            val target = member ?: identityRegistry.get(ownerId)?.let { identity ->
+                AgentStatus(
+                    present = true,
+                    memberId = identity.id,
+                    memberName = identity.name,
+                    aliases = identity.aliases.joinToString(","),
+                    memberKind = identity.kind,
+                )
+            } ?: AgentStatus(
+                present = true,
+                memberId = ownerId,
+                memberName = requested,
+                memberKind = MEMBER_KIND_USER,
+            )
+            if (!settingsStore.identityBound) {
+                adoptIdentity(target)
+                nameResolution = "Adopted the existing identity ${target.memberName}."
+                return true
+            }
+            pendingIdentitySwitch = target
+            nameResolution = "This name belongs to ${target.memberName}. Confirm the identity switch."
+            return false
+        }
+
+        identityRegistry.register(
+            MemberIdentity(
+                id = currentId,
+                name = currentName.ifBlank { requested },
+                kind = MEMBER_KIND_USER,
+            ),
+            source = settingsStore.deviceId,
+        )
+        val renamed = try {
+            identityRegistry.rename(currentId, requested)
+        } catch (conflict: IdentityLabelConflict) {
+            val target = identityRegistry.get(conflict.ownerId)?.let { identity ->
+                AgentStatus(
+                    present = true,
+                    memberId = identity.id,
+                    memberName = identity.name,
+                    aliases = identity.aliases.joinToString(","),
+                    memberKind = identity.kind,
+                )
+            } ?: AgentStatus(
+                present = true,
+                memberId = conflict.ownerId,
+                memberName = requested,
+            )
+            if (!settingsStore.identityBound) {
+                adoptIdentity(target)
+                nameResolution = "Adopted the existing identity ${target.memberName}."
+                return true
+            }
+            pendingIdentitySwitch = target
+            nameResolution = "This name belongs to ${target.memberName}. Confirm the identity switch."
+            return false
+        }
+        displayName = renamed.name
+        settingsStore.applyIdentity(renamed.name, renamed.id, bound = true)
+        nameResolution = if (canonicalMemberName(renamed.name) == canonicalMemberName(currentName)) {
+            null
+        } else {
+            "Renamed. ${currentName} remains a permanent alias."
+        }
+        return true
+    }
+
+    private fun adoptIdentity(target: AgentStatus) {
+        val id = target.memberId.ifBlank { legacyMemberId(target.memberName) }
+        val name = target.memberName.ifBlank { displayName.trim() }
+        displayName = name
+        bio = target.description
+        avatarBytes = chatEngine.peerAvatars[id]?.copyOf()
+        identityRegistry.observe(
+            MemberIdentity(
+                id = id,
+                name = name,
+                aliases = target.aliasList(),
+                kind = target.memberKind,
+            ),
+            source = settingsStore.deviceId,
+        )
+        settingsStore.applyIdentity(name, id, bound = true)
+        nameResolution = "This name already belongs to ${target.memberName}; using its existing profile."
     }
 
     fun clearChatHistory() {

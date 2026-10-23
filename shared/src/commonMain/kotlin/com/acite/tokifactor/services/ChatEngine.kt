@@ -7,15 +7,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.acite.tokifactor.copyFileToPlatformFile
 import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.AvatarEnvelope
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.InboundNotice
+import com.acite.tokifactor.model.MEMBER_KIND_USER
+import com.acite.tokifactor.model.MemberIdentity
+import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.model.PictureChunk
 import com.acite.tokifactor.model.TextChunk
 import com.acite.tokifactor.model.TextEnvelope
 import com.acite.tokifactor.model.selectedMember
 import com.acite.tokifactor.model.shouldExpireAki
+import com.acite.tokifactor.model.memberControlMetadata
+import com.acite.tokifactor.model.memberNameKey
+import com.acite.tokifactor.model.isMemberId
+import com.acite.tokifactor.model.legacyMemberId
+import com.acite.tokifactor.model.withControlProfile
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
@@ -50,12 +59,13 @@ import kotlin.io.encoding.Base64
 class ChatEngine @Inject constructor(
     private val mqttService: MqttService,
     private val settingsStore: SettingsStore,
+    private val identityRegistry: MemberIdentityRegistry,
 ) : ChatSession {
     companion object {
         private const val CONTROL_TOPIC = "tokifactor/control"
         private const val STATUS_TIMEOUT_MS = 30_000L
         private const val IDLE_PROBE_MS = 15_000L
-        private const val ROSTER_PROBE_MS = 60_000L
+        private const val ROSTER_PROBE_MS = 20_000L
         private const val PROTOCOL_VERSION = 1
     }
 
@@ -73,6 +83,9 @@ class ChatEngine @Inject constructor(
         private set
 
     private val memberStates = mutableStateMapOf<String, AgentStatus>()
+    private val memberSources = mutableMapOf<String, MutableMap<String, Long>>()
+    private val memberOwners = mutableMapOf<String, String>()
+    private val avatarOwners = mutableMapOf<String, String>()
 
     override var selectedAgentId by mutableStateOf<String?>(null)
         private set
@@ -80,7 +93,11 @@ class ChatEngine @Inject constructor(
     override val members: List<AgentStatus>
         get() = memberStates.values
             .filter { it.present }
-            .sortedWith(compareBy<AgentStatus>({ it.agentId != "aki" }, { it.agentName.lowercase() }, { it.agentId }))
+            .sortedWith(compareBy<AgentStatus>(
+                { it.memberName.lowercase() != "aki" && !it.aliasList().any { alias -> alias.lowercase() == "aki" } },
+                { it.memberName.lowercase() },
+                { it.memberId },
+            ))
 
     override val agentStatus: AgentStatus
         get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
@@ -89,8 +106,24 @@ class ChatEngine @Inject constructor(
         if (agentId.isNotBlank()) selectedAgentId = agentId
     }
 
+    override fun findMember(name: String): AgentStatus? =
+        memberStates.values.firstOrNull { member ->
+            canonicalMemberName(member.memberName) == canonicalMemberName(name) ||
+                member.memberId == name ||
+                member.aliasList().any { alias -> canonicalMemberName(alias) == canonicalMemberName(name) }
+        }
+
     override val deviceId: String
         get() = settingsStore.deviceId
+
+    override val displayName: String
+        get() = settingsStore.displayName
+
+    override val memberId: String
+        get() = settingsStore.memberId
+
+    override val bio: String
+        get() = settingsStore.bio
 
     private val _connectionStatus = MutableStateFlow("Connecting…")
     override val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
@@ -157,15 +190,43 @@ class ChatEngine @Inject constructor(
             } catch (_: Exception) {
                 emptyList()
             }
+            identityRegistry.register(
+                MemberIdentity(
+                    id = settingsStore.memberId,
+                    name = settingsStore.displayName,
+                    aliases = emptyList(),
+                    kind = MEMBER_KIND_USER,
+                ),
+                source = settingsStore.deviceId,
+            )
+            val ownId = settingsStore.memberId
+            val ownNameKey = canonicalMemberName(settingsStore.displayName)
+            val migratedAvatars = linkedMapOf<String, PeerAvatarStore.Entry>()
+            for ((key, entry) in cachedAvatars) {
+                if (key == ownId) continue
+                if (key == settingsStore.deviceId || canonicalMemberName(key) == ownNameKey) {
+                    PeerAvatarStore.delete(key)
+                    continue
+                }
+                val target = if (isMemberId(key)) {
+                    key
+                } else {
+                    identityRegistry.resolve(key).ifBlank { legacyMemberId(key) }
+                }
+                if (target != key) PeerAvatarStore.migrateKey(key, target)
+                migratedAvatars[target] = entry.copy(id = target)
+            }
             withContext(Dispatchers.Main) {
-                for ((id, entry) in cachedAvatars) {
+                for ((id, entry) in migratedAvatars) {
                     peerAvatars[id] = entry.bytes
                     peerAvatarHash[id] = entry.hash
                     emitEvent(ChatEngineEvent.PeerAvatarChanged(id, entry.bytes))
                 }
                 if (loaded.isNotEmpty()) {
                     val existing = messages.map { it.id }.toHashSet()
-                    val restored = loaded.filter { it.id !in existing }
+                    val restored = loaded
+                        .filter { it.id !in existing }
+                        .map(::normalizeStoredMessage)
                     if (restored.isNotEmpty()) {
                         messages.addAll(0, restored)
                         restored.forEach { emitEvent(ChatEngineEvent.MessageUpsert(it)) }
@@ -176,19 +237,76 @@ class ChatEngine @Inject constructor(
                 }
             }
             historyReady.set(true)
+            if (loaded.isNotEmpty()) schedulePersist()
             startMqttSession()
         }
     }
 
     override fun refreshSettings() {
         avatarBytes = settingsStore.avatarBytes
+        val ownId = settingsStore.memberId
+        for (index in messages.indices) {
+            val message = messages[index]
+            val mine = message.senderId == ownId
+            val name = when {
+                mine -> settingsStore.displayName
+                message.senderId.isBlank() -> message.sender
+                else -> identityRegistry.get(message.senderId)?.name ?: message.sender
+            }
+            if (mine != message.isMine || name != message.sender) {
+                messages[index] = message.copy(isMine = mine, sender = name)
+                emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
+            }
+        }
         if (channelKey() != sessionChannelKey) {
             startMqttSession()
         } else if (connected) {
             scope.launch {
                 publishAkiProbe()
-                publishAvatarHave()
+                publishAvatarHave(force = true)
             }
+        }
+    }
+
+    private fun normalizeStoredMessage(message: ChatMessage): ChatMessage {
+        val ownId = settingsStore.memberId
+        val target = when {
+            isMemberId(message.senderId) -> message.senderId
+            message.senderId == settingsStore.deviceId -> ownId
+            canonicalMemberName(message.sender) == canonicalMemberName(settingsStore.displayName) -> ownId
+            else -> identityRegistry.resolve(message.sender).ifBlank {
+                legacyMemberId(message.sender.ifBlank { message.senderId })
+            }
+        }
+        val name = when {
+            target == ownId -> settingsStore.displayName
+            else -> identityRegistry.get(target)?.name ?: message.sender
+        }
+        return message.copy(
+            senderId = target,
+            sender = name.ifBlank { message.sender },
+            isMine = target == ownId,
+        )
+    }
+
+    private fun resolveIncomingMemberId(
+        sender: String,
+        senderId: String,
+        metadata: Map<String, String> = emptyMap(),
+    ): String {
+        val explicit = metadata["memberId"].orEmpty().trim()
+        if (isMemberId(explicit)) return explicit
+        val envelopeId = senderId.trim()
+        if (isMemberId(envelopeId)) return envelopeId
+        return identityRegistry.resolve(sender).ifBlank { legacyMemberId(sender) }
+    }
+
+    private fun normalizeMemberReference(value: String): String {
+        val reference = value.trim()
+        if (reference.isEmpty() || isMemberId(reference)) return reference
+        if (reference == settingsStore.deviceId) return settingsStore.memberId
+        return identityRegistry.resolve(reference).ifBlank {
+            legacyMemberId(reference)
         }
     }
 
@@ -303,7 +421,14 @@ class ChatEngine @Inject constructor(
                                             val envelope = TextEnvelope.decode(clear)
                                             if (envelope != null) {
                                                 applyIncomingEnvelope(envelope, message.timestamp)
-                                                notePeerAvatar(envelope.senderId, envelope.avatarHash)
+                                                notePeerAvatar(
+                                                    resolveIncomingMemberId(
+                                                        envelope.sender,
+                                                        envelope.senderId,
+                                                        envelope.metadata,
+                                                    ),
+                                                    envelope.avatarHash,
+                                                )
                                             } else {
                                                 addChatText(clear, sender = "Unknown", isMine = false)
                                             }
@@ -400,6 +525,9 @@ class ChatEngine @Inject constructor(
         else -> null
     }
 
+    private fun isOwnMember(memberId: String): Boolean =
+        memberId == settingsStore.memberId
+
     private fun startAkiControlLoop() {
         akiControlJob?.cancel()
         lastProbeSentAt = 0L
@@ -411,9 +539,22 @@ class ChatEngine @Inject constructor(
                 }
                 if (expired.isNotEmpty()) {
                     withContext(Dispatchers.Main) {
-                        for (id in expired.keys) {
-                            val current = memberStates[id] ?: continue
-                            memberStates[id] = current.copy(present = false)
+                        for (key in expired.keys) {
+                            val current = memberStates[key] ?: continue
+                            val sources = memberSources[key]
+                            if (sources != null) {
+                                sources.entries.removeAll { (_, seenAt) ->
+                                    now - seenAt > STATUS_TIMEOUT_MS
+                                }
+                                if (sources.isNotEmpty()) {
+                                    memberStates[key] = current.copy(
+                                        present = true,
+                                        lastSeenAt = sources.values.max(),
+                                    )
+                                    continue
+                                }
+                            }
+                            memberStates[key] = current.copy(present = false)
                         }
                         if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
                             selectedAgentId = null
@@ -437,7 +578,12 @@ class ChatEngine @Inject constructor(
         lastProbeSentAt = 0L
         scope.launch(Dispatchers.Main) {
             memberStates.clear()
-            if (clearIdentity) selectedAgentId = null
+            memberSources.clear()
+            if (clearIdentity) {
+                selectedAgentId = null
+                memberOwners.clear()
+                avatarOwners.clear()
+            }
             emitMembersChanged()
         }
     }
@@ -453,13 +599,20 @@ class ChatEngine @Inject constructor(
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = "Aki probe",
-            senderId = settingsStore.deviceId,
+            senderId = settingsStore.memberId,
             avatarHash = ownAvatarHash(),
             metadata = mapOf(
                 "schema" to "akid.v1",
                 "kind" to "probe",
                 "protocolVersion" to PROTOCOL_VERSION.toString(),
                 "probeId" to probeId,
+            ) + memberControlMetadata(
+                name = settingsStore.displayName,
+                bio = settingsStore.bio,
+                memberKind = MEMBER_KIND_USER,
+                memberId = settingsStore.memberId,
+                sourceId = settingsStore.deviceId,
+                aliases = identityRegistry.get(settingsStore.memberId)?.aliases.orEmpty(),
             ),
         )
         val payload = try {
@@ -485,30 +638,70 @@ class ChatEngine @Inject constructor(
         if (kind != "presence" && kind != "status" && kind != "offline") return
         if (meta["protocolVersion"]?.toIntOrNull() != PROTOCOL_VERSION) return
         val senderId = envelope.senderId
-        if (senderId.isNotEmpty() && senderId == settingsStore.deviceId) return
-        val agentId = meta["agentId"].orEmpty()
-            .ifBlank { meta["agent"].orEmpty() }
-            .ifBlank { senderId }
-        if (agentId.isBlank() || agentId == settingsStore.deviceId) return
+        val memberName = meta["memberName"].orEmpty().trim()
+            .ifBlank { meta["agentName"].orEmpty().trim() }
+            .ifBlank { envelope.sender.trim() }
+        val memberId = meta["memberId"].orEmpty().trim().takeIf(::isMemberId)
+            ?: senderId.trim().takeIf(::isMemberId)
+            ?: identityRegistry.resolve(memberName).ifBlank { legacyMemberId(memberName) }
+        if (memberId.isBlank() || memberId == settingsStore.memberId) return
+        val sourceId = meta["sourceId"].orEmpty().trim()
+            .ifBlank { senderId.trim().ifBlank { memberId } }
+        val aliases = meta["aliases"].orEmpty()
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val claimed = identityRegistry.observe(
+            MemberIdentity(
+                id = memberId,
+                name = memberName.ifBlank { memberId },
+                aliases = aliases,
+                kind = meta["memberKind"].orEmpty().ifBlank { "agent" },
+            ),
+            source = sourceId,
+        )
+        val profileMetadata = if (claimed) {
+            meta
+        } else {
+            meta - "memberName" - "agentName" - "aliases"
+        }
+        val effectiveName = if (claimed) {
+            memberName
+        } else {
+            memberStates[memberId]?.memberName?.ifBlank { memberId } ?: memberId
+        }
         if (kind == "offline") {
-            memberStates.remove(agentId)
-            avatarRefreshRequested.remove(agentId)
-            if (selectedAgentId == agentId) selectedAgentId = null
+            val sources = memberSources[memberId]
+            sources?.remove(sourceId)
+            if (sources.isNullOrEmpty()) {
+                memberStates.remove(memberId)
+                memberSources.remove(memberId)
+                memberOwners.remove(memberId)
+                avatarRefreshRequested.remove(memberId)
+                if (selectedAgentId == memberId) selectedAgentId = null
+            } else {
+                memberStates[memberId]?.let { current ->
+                    memberStates[memberId] = current.copy(
+                        present = true,
+                        lastSeenAt = sources.values.max(),
+                    )
+                }
+            }
             emitMembersChanged()
             return
         }
         val now = System.currentTimeMillis()
-        val firstSeen = memberStates[agentId] == null
-        val old = memberStates[agentId] ?: AgentStatus(agentId = agentId)
-        memberStates[agentId] = old.copy(
-            present = true,
-            lastSeenAt = now,
-            agentId = agentId,
-            agentName = meta["agentName"].orEmpty().ifBlank {
-                envelope.sender.ifBlank { old.agentName.ifBlank { agentId } }
-            },
-            description = meta["description"].orEmpty().take(300),
-            aliases = meta["aliases"].orEmpty().take(512),
+        val firstSeen = memberStates[memberId] == null
+        val old = memberStates[memberId] ?: AgentStatus(memberId = memberId)
+        val owner = memberOwners.getOrPut(memberId) { sourceId }
+        memberSources.getOrPut(memberId) { mutableMapOf() }[sourceId] = now
+        val updated = old.withControlProfile(
+            metadata = profileMetadata,
+            fallbackName = effectiveName,
+            now = now,
+            updateProfile = owner == sourceId,
+        ).copy(
+            memberId = memberId,
             model = meta["model"] ?: old.model,
             reasoning = meta["reasoning"] ?: old.reasoning,
             contextLimit = meta["contextLimit"]?.toIntOrNull() ?: old.contextLimit,
@@ -523,11 +716,21 @@ class ChatEngine @Inject constructor(
             uptimeS = meta["uptimeS"]?.toLongOrNull() ?: old.uptimeS,
             memoryTokens = meta["memoryTokens"]?.toIntOrNull() ?: old.memoryTokens,
         )
+        memberStates[memberId] = updated
+        if (updated.memberName != old.memberName && updated.memberName.isNotBlank()) {
+            for (index in messages.indices) {
+                val message = messages[index]
+                if (message.senderId == memberId && message.sender != updated.memberName) {
+                    messages[index] = message.copy(sender = updated.memberName)
+                    emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
+                }
+            }
+        }
         if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
             selectedAgentId = null
         }
         if (firstSeen) {
-            schedulePeerAvatarRefresh(agentId)
+            schedulePeerAvatarRefresh(memberId)
         }
         emitMembersChanged()
     }
@@ -575,13 +778,35 @@ class ChatEngine @Inject constructor(
     ) {
         val eventAt = envelope.sentAt.takeIf { it > 0L } ?: receivedAt
         val meta = envelope.metadata
+        val memberId = resolveIncomingMemberId(
+            envelope.sender,
+            envelope.senderId,
+            meta,
+        )
+        val senderName = meta["memberName"].orEmpty().trim()
+            .ifBlank { meta["agentName"].orEmpty().trim() }
+            .ifBlank { identityRegistry.get(memberId)?.name.orEmpty() }
+            .ifBlank { envelope.sender }
+        if (memberId.isNotBlank() && memberId != settingsStore.memberId) {
+            identityRegistry.observe(
+                MemberIdentity(
+                    id = memberId,
+                    name = senderName.ifBlank { memberId },
+                    aliases = meta["aliases"].orEmpty().split(',').map(String::trim)
+                        .filter(String::isNotEmpty),
+                    kind = meta["memberKind"].orEmpty().ifBlank { "agent" },
+                ),
+                source = meta["sourceId"].orEmpty().ifBlank { envelope.senderId },
+            )
+        }
+        val normalized = envelope.copy(sender = senderName, senderId = memberId)
         if (meta["schema"] != "akid.v1") {
             addChatText(
-                envelope.text,
-                sender = envelope.sender,
-                senderId = envelope.senderId,
-                isMine = false,
-                id = envelope.messageId.ifBlank { UUID.randomUUID().toString() },
+                normalized.text,
+                sender = normalized.sender,
+                senderId = normalized.senderId,
+                isMine = isOwnMember(normalized.senderId),
+                id = normalized.messageId.ifBlank { UUID.randomUUID().toString() },
                 sentAt = eventAt,
             )
             return
@@ -590,11 +815,11 @@ class ChatEngine @Inject constructor(
         val turnId = meta["turnId"].orEmpty()
         val seq = meta["seq"]?.toIntOrNull() ?: 0
         when (kind) {
-            "turn" -> applyAgentTurn(envelope, turnId, seq, eventAt)
-            "tool" -> applyAgentTool(envelope, turnId, seq, eventAt)
-            "approval" -> applyAgentApproval(envelope, turnId, seq, eventAt)
-            "approval_resolved" -> applyAgentApprovalResolved(envelope, turnId, seq, eventAt)
-            "error" -> applyAgentError(envelope, turnId, seq, eventAt)
+            "turn" -> applyAgentTurn(normalized, turnId, seq, eventAt)
+            "tool" -> applyAgentTool(normalized, turnId, seq, eventAt)
+            "approval" -> applyAgentApproval(normalized, turnId, seq, eventAt)
+            "approval_resolved" -> applyAgentApprovalResolved(normalized, turnId, seq, eventAt)
+            "error" -> applyAgentError(normalized, turnId, seq, eventAt)
         }
     }
 
@@ -721,7 +946,9 @@ class ChatEngine @Inject constructor(
                 toolCallId = envelope.metadata["toolCallId"].orEmpty(),
                 toolName = envelope.metadata["toolName"].orEmpty(),
                 approvalId = approvalId,
-                requesterId = envelope.metadata["requesterId"].orEmpty(),
+                requesterId = normalizeMemberReference(
+                    envelope.metadata["requesterId"].orEmpty()
+                ),
                 timeoutS = envelope.metadata["timeoutS"]?.toIntOrNull() ?: 0,
                 details = envelope.metadata["details"].orEmpty(),
                 status = "pending",
@@ -898,7 +1125,10 @@ class ChatEngine @Inject constructor(
         val index = messages.indexOfFirst { it.id == id }
         if (index < 0) return
         val message = messages[index]
-        if (message.requesterId.isNotEmpty() && message.requesterId != settingsStore.deviceId) return
+        if (message.requesterId.isNotEmpty() &&
+            message.requesterId != settingsStore.deviceId &&
+            message.requesterId != settingsStore.memberId
+        ) return
         if (message.status != "pending") return
         val pendingStatus = if (allow) "allow_pending" else "deny_pending"
         messages[index] = message.copy(status = pendingStatus)
@@ -908,10 +1138,18 @@ class ChatEngine @Inject constructor(
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = command,
-            senderId = settingsStore.deviceId,
+            senderId = settingsStore.memberId,
             avatarHash = ownAvatarHash(),
-            messageId = TextEnvelope.messageId(settingsStore.deviceId, sentAt, command),
+            messageId = TextEnvelope.messageId(
+                settingsStore.memberId,
+                sentAt,
+                command,
+            ),
             sentAt = sentAt,
+            metadata = mapOf(
+                "memberId" to settingsStore.memberId,
+                "memberName" to settingsStore.displayName,
+            ),
         ).encode()
         val payload = Base64.encode(
             SecureMessageChannel.encrypt(
@@ -942,14 +1180,19 @@ class ChatEngine @Inject constructor(
             return
         }
         val sentAt = System.currentTimeMillis()
-        val messageId = TextEnvelope.messageId(settingsStore.deviceId, sentAt, content)
+        val senderId = settingsStore.memberId
+        val messageId = TextEnvelope.messageId(senderId, sentAt, content)
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = content,
-            senderId = settingsStore.deviceId,
+            senderId = senderId,
             avatarHash = ownAvatarHash(),
             messageId = messageId,
             sentAt = sentAt,
+            metadata = mapOf(
+                "memberId" to senderId,
+                "memberName" to settingsStore.displayName,
+            ),
         ).encode()
         val c = SecureMessageChannel.encrypt(envelope.encodeToByteArray(), settingsStore.magicString)
         val msg = Base64.encode(c)
@@ -961,7 +1204,7 @@ class ChatEngine @Inject constructor(
         addChatText(
             content,
             sender = settingsStore.displayName,
-            senderId = settingsStore.deviceId,
+            senderId = senderId,
             isMine = true,
             id = messageId,
             sentAt = sentAt,
@@ -976,7 +1219,7 @@ class ChatEngine @Inject constructor(
 
     private fun sendChunkedText(content: String, utf8: ByteArray) {
         val senderName = settingsStore.displayName
-        val senderId = settingsStore.deviceId
+        val senderId = settingsStore.memberId
         val avatarHash = ownAvatarHash()
         val sentAt = System.currentTimeMillis()
         val transferId = TextEnvelope.messageId(senderId, sentAt, content)
@@ -1027,6 +1270,10 @@ class ChatEngine @Inject constructor(
                         messageId = transferId,
                         sentAt = sentAt,
                         size = fileSize,
+                        metadata = mapOf(
+                            "memberId" to senderId,
+                            "memberName" to senderName,
+                        ),
                     ).encode()
                 }
                 withContext(Dispatchers.Main) {
@@ -1099,7 +1346,7 @@ class ChatEngine @Inject constructor(
     private fun sendBinary(file: PlatformFile, asFile: Boolean, failLabel: String) {
         if (!connected) return
         val senderName = settingsStore.displayName
-        val senderId = settingsStore.deviceId
+        val senderId = settingsStore.memberId
         val avatarHash = ownAvatarHash()
         var sendAsFile = asFile
         var sendTopic = if (asFile) "tokifactor/file" else "tokifactor/picture"
@@ -1412,6 +1659,7 @@ class ChatEngine @Inject constructor(
         metadata: Map<String, String> = emptyMap(),
     ) {
         val messageAt = sentAt.takeIf { it > 0L } ?: receivedAt
+        val memberId = resolveIncomingMemberId(sender, senderId, metadata)
         if (transferId in completedTransfers) return
         if (withContext(Dispatchers.Main) {
                 messages.any { it.id == transferId && !it.isTransferring }
@@ -1434,7 +1682,7 @@ class ChatEngine @Inject constructor(
         }
         if (senderId.isNotEmpty()) {
             withContext(Dispatchers.Main) {
-                notePeerAvatar(senderId, avatarHash)
+                notePeerAvatar(memberId, avatarHash)
             }
         }
         val cipher = try {
@@ -1461,7 +1709,7 @@ class ChatEngine @Inject constructor(
                 total = total,
                 hash = hash,
                 sender = sender,
-                senderId = senderId,
+                senderId = memberId,
                 fileName = fileName,
                 fileSize = fileSize,
                 isChunkedText = isChunkedText,
@@ -1506,7 +1754,7 @@ class ChatEngine @Inject constructor(
                             TextEnvelope(
                                 sender = sender,
                                 text = text,
-                                senderId = senderId,
+                                senderId = memberId,
                                 avatarHash = avatarHash,
                                 messageId = messageId,
                                 sentAt = sentAt,
@@ -1526,6 +1774,7 @@ class ChatEngine @Inject constructor(
                                 chunksReceived = 0,
                                 chunksTotal = 0,
                                 isChunkedText = false,
+                                isMine = isOwnMember(memberId),
                             )
                         }
                         messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
@@ -1549,6 +1798,7 @@ class ChatEngine @Inject constructor(
                         fileSize = size,
                         chunksReceived = 0,
                         chunksTotal = 0,
+                        isMine = isOwnMember(memberId),
                     )
                 }
                 messages.firstOrNull { it.id == transferId }?.let { emitNotice(it) }
@@ -1627,7 +1877,7 @@ class ChatEngine @Inject constructor(
                     pic = null,
                     sender = state.sender,
                     senderId = state.senderId,
-                    isMine = false,
+                    isMine = isOwnMember(state.senderId),
                     chunksReceived = state.count,
                     chunksTotal = total,
                     fileName = displayName,
@@ -1711,7 +1961,7 @@ class ChatEngine @Inject constructor(
     }
 
     private fun notePeerAvatar(senderId: String, hash: String) {
-        if (senderId.isEmpty() || senderId == settingsStore.deviceId) return
+        if (senderId.isEmpty() || senderId == settingsStore.memberId) return
         if (hash.isEmpty()) {
             peerAvatars.remove(senderId)
             peerAvatarHash.remove(senderId)
@@ -1742,10 +1992,12 @@ class ChatEngine @Inject constructor(
     private suspend fun requestKnownPeerAvatars() {
         val ids = withContext(Dispatchers.Main.immediate) {
             buildSet {
-                messages.mapTo(this) { it.senderId }
+                    messages.mapTo(this) { it.senderId }
                 addAll(peerAvatars.keys)
                 addAll(memberStates.keys)
-            }.filter { it.isNotEmpty() && it != settingsStore.deviceId }
+            }.filter {
+                    it.isNotEmpty() && it != settingsStore.memberId
+            }
         }
         for (id in ids) {
             avatarRefreshRequested.add(id)
@@ -1754,12 +2006,12 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private fun schedulePeerAvatarRefresh(agentId: String) {
-        if (agentId.isEmpty() || agentId == settingsStore.deviceId) return
-        if (!avatarRefreshRequested.add(agentId)) return
-        val hash = peerAvatarHash[agentId] ?: ""
+    private fun schedulePeerAvatarRefresh(memberId: String) {
+        if (memberId.isEmpty() || memberId == settingsStore.memberId) return
+        if (!avatarRefreshRequested.add(memberId)) return
+        val hash = peerAvatarHash[memberId] ?: ""
         scope.launch(Dispatchers.IO) {
-            publishAvatarWant(agentId, hash)
+            publishAvatarWant(memberId, hash)
         }
     }
 
@@ -1783,7 +2035,12 @@ class ChatEngine @Inject constructor(
         } else {
             ""
         }
-        val payload = AvatarEnvelope.have(settingsStore.deviceId, hash, data).encode()
+        val payload = AvatarEnvelope.have(
+            settingsStore.memberId,
+            hash,
+            data,
+            settingsStore.deviceId,
+        ).encode()
         val maxPacket = mqttService.getMaximumPacketSize()
         if (maxPacket != null && payload.encodeToByteArray().size > maxPacket) return
         try {
@@ -1795,20 +2052,26 @@ class ChatEngine @Inject constructor(
 
     private suspend fun handleAvatarEnvelope(payload: String) {
         val envelope = AvatarEnvelope.decode(payload) ?: return
+        val ownKey = settingsStore.memberId
         when (envelope.type) {
             AvatarEnvelope.WANT -> {
-                if (envelope.id == settingsStore.deviceId) {
+                if (envelope.id == ownKey) {
                     publishAvatarHave(force = true)
                 }
             }
             AvatarEnvelope.HAVE -> {
-                if (envelope.id == settingsStore.deviceId) return
+                if (envelope.id == ownKey) return
                 applyPeerAvatar(envelope)
             }
         }
     }
 
     private suspend fun applyPeerAvatar(envelope: AvatarEnvelope) {
+        val source = envelope.source.ifBlank { envelope.id }
+        val owner = withContext(Dispatchers.Main) {
+            avatarOwners.getOrPut(envelope.id) { source }
+        }
+        if (source != owner) return
         if (envelope.hash.isEmpty() || envelope.data.isEmpty()) {
             try {
                 PeerAvatarStore.delete(envelope.id)
