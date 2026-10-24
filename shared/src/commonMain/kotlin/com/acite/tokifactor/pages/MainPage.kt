@@ -348,7 +348,9 @@ fun MainPage(
         }
     }
 
-    val displayItems = buildChatDisplayItems(viewModel.messages)
+    val displayItems by remember(viewModel.messages) {
+        derivedStateOf { buildChatDisplayItems(viewModel.messages) }
+    }
     val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(Unit) {
@@ -360,7 +362,10 @@ fun MainPage(
         if (size > 0 && size > lastCount) {
             if (lastCount <= 0) {
                 listState.scrollToItem(size - 1)
-            } else {
+            } else if (!listState.isScrollInProgress &&
+                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                    ?.let { it >= size - 2 } == true
+            ) {
                 listState.animateScrollToItem(size - 1)
             }
         }
@@ -377,7 +382,7 @@ fun MainPage(
         val size = displayItems.size
         if (size == 0) return@LaunchedEffect
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (lastVisible >= size - 3) {
+        if (!listState.isScrollInProgress && lastVisible >= size - 3) {
             listState.animateScrollToItem(size - 1)
         }
     }
@@ -429,7 +434,6 @@ fun MainPage(
                     selectionMode = selectionMode,
                     onToggle = { toggleSelected(item) },
                     onLongPress = { enterSelection(item) },
-                    modifier = Modifier.animateItem(),
                 ) {
                     when (item) {
                         is ChatDisplayItem.ToolGroup -> AgentToolGroupCard(
