@@ -1,6 +1,7 @@
 package com.acite.tokifactor.daemon
 
 import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.services.ChatEngineEvent
@@ -23,6 +24,15 @@ class DaemonProtocolTest {
             fileBytes = byteArrayOf(4, 5),
             fileSize = 2,
             sentAt = 42L,
+            attachments = listOf(
+                ChatAttachment(
+                    id = "attachment-1",
+                    name = "图片1",
+                    mime = "image/png",
+                    filePath = "/tmp/image-1.png",
+                    size = 123,
+                )
+            ),
         )
         val member = AgentStatus(
             present = true,
@@ -54,6 +64,7 @@ class DaemonProtocolTest {
         assertEquals(7L, decoded.revision)
         assertEquals(message, decodedMessage)
         assertContentEquals(message.pic, decodedMessage.pic)
+        assertEquals(message.attachments, decodedMessage.attachments)
         assertEquals(member, snapshot.members.single().toAgentStatus())
         assertEquals("AQID", snapshot.peerAvatars["alice"])
     }
@@ -64,6 +75,8 @@ class DaemonProtocolTest {
             requestId = "request-1",
             command = DaemonProtocol.COMMAND_DELETE_MESSAGES,
             ids = listOf("a", "b"),
+            attachmentPaths = listOf("/tmp/a.png"),
+            attachmentNames = listOf("图片1"),
         )
 
         val decoded = DaemonJson.decodeFromString(
@@ -73,6 +86,8 @@ class DaemonProtocolTest {
 
         assertEquals(command, decoded)
         assertEquals(listOf("a", "b"), decoded.ids)
+        assertEquals(listOf("/tmp/a.png"), decoded.attachmentPaths)
+        assertEquals(listOf("图片1"), decoded.attachmentNames)
     }
 
     @Test

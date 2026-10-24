@@ -3,6 +3,7 @@ package com.acite.tokifactor.pages
 import androidx.lifecycle.ViewModel
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.services.ChatSession
+import com.acite.tokifactor.services.OutgoingAttachment
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
@@ -62,7 +63,8 @@ class MainPageViewModel(
     fun respondToApproval(approvalId: String, allow: Boolean) =
         chatEngine.respondToApproval(approvalId, allow)
 
-    fun sendMessage(content: String) = chatEngine.sendMessage(content)
+    fun sendMessage(content: String, attachments: List<OutgoingAttachment> = emptyList()) =
+        chatEngine.sendMessage(content, attachments)
 
     fun sendPicture(file: PlatformFile) = chatEngine.sendPicture(file)
 

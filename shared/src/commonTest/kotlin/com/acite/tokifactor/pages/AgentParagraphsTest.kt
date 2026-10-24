@@ -43,6 +43,106 @@ class AgentParagraphsTest {
     }
 
     @Test
+    fun keepsFencedCodeAttachedToTheListItemAboveIt() {
+        val content = "Evidence:\n\n" +
+            "1. approval passed\n" +
+            "2. image tool returned:\n" +
+            "```\n" +
+            "image generated\n" +
+            "```\n" +
+            "3. send tool returned:\n" +
+            "```\n" +
+            "sent image\n" +
+            "```\n\n" +
+            "Done."
+
+        assertEquals(
+            listOf(
+                "Evidence:",
+                "1. approval passed\n" +
+                    "2. image tool returned:\n" +
+                    "```\n" +
+                    "image generated\n" +
+                    "```\n" +
+                    "3. send tool returned:\n" +
+                    "```\n" +
+                    "sent image\n" +
+                    "```",
+                "Done.",
+            ),
+            splitAgentParagraphs(content),
+        )
+    }
+
+    @Test
+    fun keepsLooseOrderedListTogether() {
+        val content = "Intro\n\n" +
+            "1. first\n\n" +
+            "2. second\n\n" +
+            "   continuation\n\n" +
+            "3. third\n\n" +
+            "Outro"
+
+        assertEquals(
+            listOf(
+                "Intro",
+                "1. first\n\n" +
+                    "2. second\n\n" +
+                    "   continuation\n\n" +
+                    "3. third",
+                "Outro",
+            ),
+            splitAgentParagraphs(content),
+        )
+    }
+
+    @Test
+    fun keepsLooseBulletListWithNestedCodeTogether() {
+        val content = "Intro\n\n" +
+            "- first\n\n" +
+            "  ```\n" +
+            "  code\n\n" +
+            "  more code\n" +
+            "  ```\n\n" +
+            "- second\n\n" +
+            "Outro"
+
+        assertEquals(
+            listOf(
+                "Intro",
+                "- first\n\n" +
+                    "  ```\n" +
+                    "  code\n\n" +
+                    "  more code\n" +
+                    "  ```\n\n" +
+                    "- second",
+                "Outro",
+            ),
+            splitAgentParagraphs(content),
+        )
+    }
+
+    @Test
+    fun keepsBlankLinesInsideIndentedCode() {
+        val content = "Before\n\n    first\n\n    second\n\nAfter"
+
+        assertEquals(
+            listOf("Before", "    first\n\n    second", "After"),
+            splitAgentParagraphs(content),
+        )
+    }
+
+    @Test
+    fun keepsBlankLinesInsideBlockQuote() {
+        val content = "Before\n\n> first\n\n> second\n\nAfter"
+
+        assertEquals(
+            listOf("Before", "> first\n\n> second", "After"),
+            splitAgentParagraphs(content),
+        )
+    }
+
+    @Test
     fun keepsSingleParagraphAndFenceExactlyAsReceived() {
         val single = "A single paragraph with  spacing."
         val code = "```\nfirst\n\nsecond\n```"

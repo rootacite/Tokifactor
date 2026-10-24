@@ -17,6 +17,7 @@ import com.acite.tokifactor.model.selectedMember
 import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.services.ChatHistoryStore
 import com.acite.tokifactor.services.ChatSession
+import com.acite.tokifactor.services.OutgoingAttachment
 import com.acite.tokifactor.services.SettingsStore
 import com.acite.tokifactor.services.insertionIndexBySentAt
 import dev.zacsweers.metro.AppScope
@@ -469,13 +470,18 @@ class DaemonChatSession @Inject constructor(
         }
     }
 
-    override fun sendMessage(content: String) {
-        if (content.isBlank()) return
+    override fun sendMessage(content: String, attachments: List<OutgoingAttachment>) {
+        if (content.isBlank() && attachments.isEmpty()) return
+        val resolved = attachments.mapNotNull { attachment ->
+            attachment.file.path?.let { it to attachment.name }
+        }
         commandScope.launch {
             request(
                 DaemonClientFrame(
                     command = DaemonProtocol.COMMAND_SEND_TEXT,
                     text = content,
+                    attachmentPaths = resolved.map { it.first },
+                    attachmentNames = resolved.map { it.second },
                 )
             )
         }

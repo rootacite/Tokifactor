@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Encrypted chat · one magic string · no server of our own</strong><br/>
-  Two (or more) devices that share a passphrase can exchange encrypted text, images, and files over a public MQTT v5 broker.
+  Two (or more) devices that share a passphrase can exchange encrypted text, mixed text-plus-image messages, images, and files over a public MQTT v5 broker.
 </p>
 
 <p align="center">
@@ -51,8 +51,8 @@ The channel exists for as long as clients stay connected. There is nothing to de
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
 - Agent replies with multiple blank-line-separated paragraphs render as separate
-  bubbles; fenced code blocks stay intact and selection/delete still target the
-  original message.
+  bubbles; Markdown lists, fenced/indented code blocks, and block quotes stay intact,
+  and selection/delete still target the original message.
 - Consecutive tool cards and approvals from the same turn collapse into one expandable
   group; pending approvals auto-expand so they stay actionable.
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.

@@ -7,6 +7,11 @@ import io.github.vinceglb.filekit.core.PlatformFile
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 
+data class OutgoingAttachment(
+    val file: PlatformFile,
+    val name: String,
+)
+
 interface ChatSession {
     val messages: List<ChatMessage>
     val avatarBytes: ByteArray?
@@ -33,7 +38,7 @@ interface ChatSession {
     fun saveMessageFile(message: ChatMessage, dest: PlatformFile)
     fun cancelOutgoing(transferId: String)
     fun respondToApproval(approvalId: String, allow: Boolean)
-    fun sendMessage(content: String)
+    fun sendMessage(content: String, attachments: List<OutgoingAttachment> = emptyList())
     fun sendPicture(file: PlatformFile)
     fun sendFile(file: PlatformFile)
 }

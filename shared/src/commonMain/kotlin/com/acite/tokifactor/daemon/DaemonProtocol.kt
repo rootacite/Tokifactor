@@ -1,6 +1,7 @@
 package com.acite.tokifactor.daemon
 
 import com.acite.tokifactor.model.AgentStatus
+import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.services.ChatEngineEvent
 import com.acite.tokifactor.services.ChatSession
@@ -51,6 +52,8 @@ data class DaemonClientFrame(
     val ids: List<String> = emptyList(),
     val content: String = "",
     val isError: Boolean = false,
+    val attachmentPaths: List<String> = emptyList(),
+    val attachmentNames: List<String> = emptyList(),
 )
 
 @Serializable
@@ -117,6 +120,19 @@ data class WireChatMessage(
     val details: String = "",
     val status: String = "",
     val sentAt: Long = 0L,
+    val attachments: List<WireChatAttachment> = emptyList(),
+)
+
+@Serializable
+data class WireChatAttachment(
+    val id: String,
+    val name: String,
+    val mime: String = "",
+    val filePath: String? = null,
+    val size: Long = 0L,
+    val isTransferring: Boolean = false,
+    val chunksReceived: Int = 0,
+    val chunksTotal: Int = 0,
 )
 
 @Serializable
@@ -216,6 +232,7 @@ fun ChatMessage.toWire(): WireChatMessage = WireChatMessage(
     details = details,
     status = status,
     sentAt = sentAt,
+    attachments = attachments.map { it.toWire() },
 )
 
 fun WireChatMessage.toChatMessage(): ChatMessage = ChatMessage(
@@ -248,6 +265,29 @@ fun WireChatMessage.toChatMessage(): ChatMessage = ChatMessage(
     details = details,
     status = status,
     sentAt = sentAt,
+    attachments = attachments.map { it.toChatAttachment() },
+)
+
+private fun ChatAttachment.toWire(): WireChatAttachment = WireChatAttachment(
+    id = id,
+    name = name,
+    mime = mime,
+    filePath = filePath,
+    size = size,
+    isTransferring = isTransferring,
+    chunksReceived = chunksReceived,
+    chunksTotal = chunksTotal,
+)
+
+private fun WireChatAttachment.toChatAttachment(): ChatAttachment = ChatAttachment(
+    id = id,
+    name = name,
+    mime = mime,
+    filePath = filePath,
+    size = size,
+    isTransferring = isTransferring,
+    chunksReceived = chunksReceived,
+    chunksTotal = chunksTotal,
 )
 
 fun AgentStatus.toWire(): WireAgentStatus = WireAgentStatus(

@@ -3,6 +3,7 @@ package com.acite.tokifactor.services
 import com.acite.tokifactor.appHistoryBlobsDir
 import com.acite.tokifactor.appHistoryDir
 import com.acite.tokifactor.appHistoryIndexFile
+import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.WireJson
 import java.io.File
@@ -39,6 +40,10 @@ object ChatHistoryStore {
                 if (!message.shouldPersist) continue
                 val blobPath = ensureBlob(message)
                 keep.add(blobName(message.id))
+                message.attachments.forEachIndexed { index, attachment ->
+                    ensureAttachmentBlob(message.id, index, attachment)
+                    keep.add(attachmentBlobName(message.id, index, attachment.id))
+                }
                 append(encode(message, blobPath))
                 append('\n')
             }
@@ -63,6 +68,10 @@ object ChatHistoryStore {
     @Synchronized
     fun deleteBlob(id: String) {
         blobFile(id).delete()
+        val prefix = blobName(id) + "__"
+        appHistoryBlobsDir().listFiles()?.forEach { file ->
+            if (file.name.startsWith(prefix)) file.delete()
+        }
     }
 
     fun storeBlobFromFile(id: String, source: File): String {
@@ -90,7 +99,27 @@ object ChatHistoryStore {
         return dest.takeIf { it.exists() }?.absolutePath
     }
 
+    private fun ensureAttachmentBlob(
+        messageId: String,
+        index: Int,
+        attachment: ChatAttachment,
+    ): String? {
+        val dest = attachmentBlobFile(messageId, index, attachment.id)
+        dest.parentFile?.mkdirs()
+        val source = attachment.filePath?.let { File(it) }?.takeIf { it.exists() }
+        if (source != null && source.canonicalFile != dest.canonicalFile) {
+            source.copyTo(dest, overwrite = true)
+        }
+        return dest.takeIf { it.exists() }?.absolutePath
+    }
+
     private fun blobFile(id: String): File = File(appHistoryBlobsDir(), blobName(id))
+
+    private fun attachmentBlobFile(messageId: String, index: Int, attachmentId: String): File =
+        File(appHistoryBlobsDir(), attachmentBlobName(messageId, index, attachmentId))
+
+    private fun attachmentBlobName(messageId: String, index: Int, attachmentId: String): String =
+        blobName(messageId) + "__" + index + "_" + blobName(attachmentId)
 
     private fun blobName(id: String): String =
         id.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "unknown" }
@@ -134,6 +163,15 @@ object ChatHistoryStore {
         if (!blobPath.isNullOrBlank() && (message.isFile || message.isImage)) {
             pairs += "hasBlob" to "true"
         }
+        if (message.attachments.isNotEmpty()) {
+            pairs += "attachmentCount" to message.attachments.size.toString()
+            message.attachments.forEachIndexed { index, attachment ->
+                pairs += "attachment${index}Id" to attachment.id
+                pairs += "attachment${index}Name" to attachment.name
+                pairs += "attachment${index}Mime" to attachment.mime
+                pairs += "attachment${index}Size" to attachment.size.toString()
+            }
+        }
         return WireJson.encodeObject(*pairs.toTypedArray())
     }
 
@@ -163,6 +201,25 @@ object ChatHistoryStore {
         val timeoutS = WireJson.extractString(json, "timeoutS")?.toIntOrNull() ?: 0
         val details = WireJson.extractString(json, "details") ?: ""
         val status = WireJson.extractString(json, "status") ?: ""
+        val attachmentCount = WireJson.extractString(json, "attachmentCount")?.toIntOrNull() ?: 0
+        val attachments = buildList {
+            for (index in 0 until attachmentCount.coerceAtMost(4)) {
+                val attachmentId = WireJson.extractString(json, "attachment${index}Id") ?: continue
+                val name = WireJson.extractString(json, "attachment${index}Name") ?: "图片${index + 1}"
+                val mime = WireJson.extractString(json, "attachment${index}Mime") ?: "image/png"
+                val size = WireJson.extractString(json, "attachment${index}Size")?.toLongOrNull() ?: 0L
+                val blob = attachmentBlobFile(id, index, attachmentId).takeIf { it.exists() }
+                add(
+                    ChatAttachment(
+                        id = attachmentId,
+                        name = name,
+                        mime = mime,
+                        filePath = blob?.absolutePath,
+                        size = size.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
+                    )
+                )
+            }
+        }
         val blob = blobFile(id).takeIf { it.exists() }
         val blobPath = blob?.absolutePath
         return when (kind) {
@@ -189,6 +246,7 @@ object ChatHistoryStore {
                 details = details,
                 status = status,
                 sentAt = sentAt,
+                attachments = attachments,
             )
             "file" -> ChatMessage(
                 id = id,
@@ -203,6 +261,7 @@ object ChatHistoryStore {
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
                 sentAt = sentAt,
+                attachments = attachments,
             )
             "image" -> ChatMessage(
                 id = id,
@@ -216,6 +275,7 @@ object ChatHistoryStore {
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
                 sentAt = sentAt,
+                attachments = attachments,
             )
             else -> ChatMessage(
                 id = id,
@@ -227,6 +287,7 @@ object ChatHistoryStore {
                 isMine = isMine,
                 isSystem = isSystem,
                 sentAt = sentAt,
+                attachments = attachments,
             )
         }
     }

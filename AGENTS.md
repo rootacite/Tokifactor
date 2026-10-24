@@ -132,6 +132,10 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
   instead of adding hardcoded palette values.
 - List state: `MainPageViewModel.messages` is a `mutableStateListOf` exposed as `List<ChatMessage>` (explicit backing field). Mutate the list in place; do not replace it with an immutable copy if you want Compose to see adds/removes.
 - Images: Coil `AsyncImage` from raw `ByteArray`; disk cache disabled.
+- Test isolation: any test that changes `user.home` must perform all filesystem
+  reads/writes/deletes while the temporary home is still active, then restore the
+  property. Never call `ChatHistoryStore.clear()` after restoring the real home;
+  this previously erased the live `~/.tokifactor/history` directory.
 
 ### MQTT
 
@@ -157,7 +161,7 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
 
 ### Models
 
-- `ChatMessage(id, content, pic: ByteArray?, isError)` — `pic != null` means image card; `isError` uses error container colors.
+- `ChatMessage(id, content, pic: ByteArray?, isError, attachments)` — one message may contain up to four named image `ChatAttachment`s. New attachments use local file paths, never base64 in daemon snapshots; `pic`/`filePath` remain for legacy single-image history. Mixed messages render a text bubble plus a thumbnail strip.
 - Agent events use the optional `agentKind/turnId/segment/seq/phase` fields on
   `ChatMessage`; `ChatEngine` upserts them by stable id so progress updates edit the
   same bubble instead of appending duplicates.
@@ -167,7 +171,9 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
 - Agent `turn` text is split into multiple display bubbles at blank-line paragraph
   boundaries. This is presentation-only: every part keeps the original message id,
   so streaming upserts, selection, deletion, and persistence still operate on one
-  message. Fenced Markdown code blocks are never split.
+  message. Blank lines inside Markdown lists, fenced/indented code blocks, and block
+  quotes do not split the bubble, and a fence immediately following a list item stays
+  attached to that list.
 - Text envelopes may carry `akid.v1` metadata (`kind`, `turnId`, `phase`, approval and
   tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
   `status`, and `offline` messages for Aki discovery and must never enter chat

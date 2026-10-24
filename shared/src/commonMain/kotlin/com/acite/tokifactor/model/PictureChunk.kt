@@ -22,6 +22,10 @@ data class PictureChunk(
     val reason: String = "",
     val size: Long = 0,
     val captionEncrypted: String = "",
+    val messageId: String = "",
+    val attachmentIndex: Int = 0,
+    val attachmentCount: Int = 1,
+    val textCommit: Boolean = false,
 ) {
     fun encode(): String {
         val id = "$transferId:$index:$total"
@@ -46,6 +50,10 @@ data class PictureChunk(
                 "size" to size.toString(),
             )
             if (sentAt > 0L) pairs += "sentAt" to sentAt.toString()
+            if (messageId.isNotEmpty()) pairs += "messageId" to messageId
+            pairs += "attachmentIndex" to attachmentIndex.toString()
+            pairs += "attachmentCount" to attachmentCount.toString()
+            if (textCommit) pairs += "textCommit" to "true"
             if (captionEncrypted.isNotEmpty()) {
                 pairs += "caption" to captionEncrypted
             }
@@ -92,6 +100,13 @@ data class PictureChunk(
             val total = parts[2].toIntOrNull() ?: return null
             if (index < 0 || total <= 0 || index >= total) return null
             if (hash.isEmpty() || encryptedData.isEmpty()) return null
+            val messageId = WireJson.extractString(payload, "messageId") ?: ""
+            val attachmentIndex = WireJson.extractString(payload, "attachmentIndex")?.toIntOrNull()
+                ?.coerceAtLeast(0) ?: 0
+            val attachmentCount = WireJson.extractString(payload, "attachmentCount")?.toIntOrNull()
+                ?.coerceAtLeast(1) ?: 1
+            val textCommit = WireJson.extractString(payload, "textCommit")
+                ?.equals("true", ignoreCase = true) == true
             return PictureChunk(
                 transferId = transferId,
                 index = index,
@@ -104,6 +119,10 @@ data class PictureChunk(
                 sentAt = sentAt,
                 size = WireJson.extractString(payload, "size")?.toLongOrNull()?.coerceAtLeast(0) ?: 0,
                 captionEncrypted = WireJson.extractString(payload, "caption") ?: "",
+                messageId = messageId,
+                attachmentIndex = attachmentIndex,
+                attachmentCount = attachmentCount,
+                textCommit = textCommit,
             )
         }
     }

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
@@ -74,12 +75,15 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import coil3.compose.AsyncImage
 import coil3.compose.LocalPlatformContext
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.MEMBER_KIND_AGENT
@@ -90,6 +94,7 @@ import com.acite.tokifactor.model.memberNameKey
 import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.queueBadgeLabel
 import com.acite.tokifactor.model.recentMemberMessages
+import com.acite.tokifactor.services.OutgoingAttachment
 import com.acite.tokifactor.ui.theme.TokiBubbleSurface
 import com.acite.tokifactor.ui.theme.TokiSurface
 import com.acite.tokifactor.ui.theme.tokiColors
@@ -159,6 +164,208 @@ fun ByteImage(
     )
 }
 
+@Composable
+private fun FullImageContent(
+    path: String?,
+    explicitBytes: ByteArray? = null,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit,
+) {
+    var bytes by remember(path, explicitBytes) { mutableStateOf(explicitBytes) }
+    var failed by remember(path, explicitBytes) { mutableStateOf(false) }
+    LaunchedEffect(path, explicitBytes) {
+        if (bytes == null && !path.isNullOrBlank()) {
+            bytes = withContext(Dispatchers.IO) {
+                runCatching { File(path).readBytes() }.getOrNull()
+            }
+            failed = bytes == null
+        }
+    }
+    val value = bytes
+    when {
+        value != null -> ByteImage(
+            imageBytes = value,
+            modifier = modifier,
+            contentScale = contentScale,
+        )
+        !path.isNullOrBlank() -> {
+            val context = LocalPlatformContext.current
+            Box(modifier = modifier, contentAlignment = Alignment.Center) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(File(path))
+                        .diskCachePolicy(CachePolicy.DISABLED)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = contentScale,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                if (failed) {
+                    Text(
+                        text = "图片加载失败",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        }
+        else -> Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Text(
+                text = "图片不可用",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PendingImageThumbnail(
+    file: PlatformFile,
+    modifier: Modifier = Modifier,
+) {
+    var bytes by remember(file) { mutableStateOf<ByteArray?>(null) }
+    LaunchedEffect(file) {
+        bytes = withContext(Dispatchers.IO) {
+            runCatching { file.readBytes() }.getOrNull()
+        }
+    }
+    val imageBytes = bytes
+    if (imageBytes != null) {
+        ByteImage(
+            imageBytes = imageBytes,
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(modifier = modifier, contentAlignment = Alignment.Center) {
+            Icon(
+                Icons.Default.Photo,
+                contentDescription = null,
+                tint = tokiColors.textDim,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+@Composable
+fun MessageAttachmentStrip(
+    attachments: List<ChatAttachment>,
+    modifier: Modifier = Modifier,
+) {
+    if (attachments.isEmpty()) return
+    val colors = tokiColors
+    var selected by remember(attachments) { mutableStateOf<ChatAttachment?>(null) }
+    val saver = rememberFileSaverLauncher { }
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(attachments, key = { it.id }) { attachment ->
+            Column(
+                modifier = Modifier.width(156.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(132.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(colors.bgCard.copy(alpha = 0.62f))
+                        .clickable(enabled = !attachment.filePath.isNullOrBlank()) {
+                            selected = attachment
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (!attachment.filePath.isNullOrBlank()) {
+                        val context = LocalPlatformContext.current
+                        AsyncImage(
+                            model = ImageRequest.Builder(context)
+                                .data(File(attachment.filePath))
+                                .diskCachePolicy(CachePolicy.DISABLED)
+                                .build(),
+                            contentDescription = attachment.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        if (attachment.isTransferring) {
+                            CircularProgressIndicator(
+                                progress = { attachment.progress },
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Text(
+                                text = "图片不可用",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = colors.textDim,
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = attachment.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.textDim,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+    val active = selected
+    if (active != null) {
+        Dialog(
+            onDismissRequest = { selected = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.94f)),
+            ) {
+                val path = active.filePath
+                if (!path.isNullOrBlank()) {
+                    FullImageContent(
+                        path = path,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                    )
+                }
+                Text(
+                    text = active.name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(20.dp),
+                )
+                Row(
+                    modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(8.dp),
+                ) {
+                    IconButton(
+                        onClick = {
+                            val bytes = active.filePath?.let { runCatching { File(it).readBytes() }.getOrNull() }
+                                ?: return@IconButton
+                            saver.launch(
+                                baseName = active.name.substringBeforeLast('.').ifBlank { "image" },
+                                extension = active.name.substringAfterLast('.', "png"),
+                                bytes = bytes,
+                            )
+                        },
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Download image", tint = Color.White)
+                    }
+                    IconButton(onClick = { selected = null }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
+}
+
 private sealed class ChatDisplayItem {
     abstract val key: String
 
@@ -173,6 +380,7 @@ private sealed class ChatDisplayItem {
     data class AgentPart(
         override val message: ChatMessage,
         val index: Int,
+        val isLast: Boolean,
     ) : MessageItem() {
         override val key: String = "agent-part:${message.id}:$index"
     }
@@ -211,6 +419,7 @@ private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplay
                         items += ChatDisplayItem.AgentPart(
                             message = message.copy(content = paragraph),
                             index = partIndex,
+                            isLast = partIndex == paragraphs.lastIndex,
                         )
                     }
                 } else {
@@ -252,6 +461,9 @@ fun MainPage(
     viewModel: MainPageViewModel = metroViewModel(),
 ) {
     var inputText by remember { mutableStateOf("") }
+    val pendingImages = remember { mutableStateListOf<Pair<PlatformFile, String>>() }
+    var renameImageIndex by remember { mutableStateOf<Int?>(null) }
+    var renameImageDraft by remember { mutableStateOf("") }
     val colors = tokiColors
     val listState = rememberLazyListState()
     var selectionMode by remember { mutableStateOf(false) }
@@ -266,7 +478,11 @@ fun MainPage(
         type = PickerType.Image
     ) { file: PlatformFile? ->
         if (file != null) {
-            viewModel.sendPicture(file = file)
+            if (pendingImages.size >= 4) {
+                viewModel.addMessage("Error : a message may contain at most 4 images.", true)
+            } else {
+                pendingImages += file to defaultAttachmentName(pendingImages.map { it.second })
+            }
         }
     }
 
@@ -477,6 +693,7 @@ fun MainPage(
                                     "error" -> SystemChip(message = message)
                                     else -> AgentTextBubble(
                                         message = message,
+                                        showAttachments = item !is ChatDisplayItem.AgentPart || item.isLast,
                                         mineAvatar = viewModel.avatarBytes,
                                         peerAvatar = messageAvatar(message),
                                         onAvatarClick = {
@@ -611,33 +828,108 @@ fun MainPage(
                     color = colors.bgPanel.copy(alpha = 0.88f),
                     borderColor = colors.stroke.copy(alpha = 0.70f),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            placeholder = { Text("Type a message...") },
+                    Column {
+                        if (pendingImages.isNotEmpty()) {
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 60.dp, top = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                items(pendingImages.size) { index ->
+                                    val (file, name) = pendingImages[index]
+                                    Row(
+                                        modifier = Modifier
+                                            .height(40.dp)
+                                            .clip(RoundedCornerShape(20.dp))
+                                            .background(colors.bgCard.copy(alpha = 0.72f))
+                                            .clickable {
+                                                renameImageIndex = index
+                                                renameImageDraft = name
+                                            }
+                                            .padding(start = 4.dp, end = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(colors.bgCard.copy(alpha = 0.72f)),
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            PendingImageThumbnail(file = file, modifier = Modifier.fillMaxSize())
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = name,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 112.dp),
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                renameImageIndex = index
+                                                renameImageDraft = name
+                                            },
+                                            modifier = Modifier.size(28.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                contentDescription = "Rename image",
+                                                modifier = Modifier.size(15.dp),
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                pendingImages.removeAt(index)
+                                                if (renameImageIndex == index) renameImageIndex = null
+                                            },
+                                            modifier = Modifier.size(28.dp),
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                contentDescription = "Remove image",
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .padding(end = 8.dp),
-                            maxLines = 4,
-                            shape = RoundedCornerShape(22.dp),
-                            colors = tokiTextFieldColors(),
-                        )
-                        Spacer(modifier = Modifier.size(48.dp))
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                placeholder = { Text("Type a message...") },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp),
+                                maxLines = 4,
+                                shape = RoundedCornerShape(22.dp),
+                                colors = tokiTextFieldColors(),
+                            )
+                            Spacer(modifier = Modifier.size(48.dp))
+                        }
                     }
                 }
 
                 SendActionButton(
                     connected = viewModel.connected,
-                    canSend = viewModel.connected && inputText.isNotBlank(),
+                    canSend = viewModel.connected && (inputText.isNotBlank() || pendingImages.isNotEmpty()),
                     onSend = {
-                        viewModel.sendMessage(inputText.trim())
+                        val names = normalizeAttachmentNames(pendingImages.map { it.second })
+                        viewModel.sendMessage(
+                            inputText.trim(),
+                            pendingImages.mapIndexed { index, item ->
+                                OutgoingAttachment(item.first, names[index])
+                            },
+                        )
                         inputText = ""
+                        pendingImages.clear()
                     },
                     onPickFile = { filePickerLauncher.launch() },
                     onPickPhoto = { imagePickerLauncher.launch() },
@@ -714,6 +1006,42 @@ fun MainPage(
             )
         }
     }
+
+        val renameIndex = renameImageIndex
+        if (renameIndex != null && renameIndex in pendingImages.indices) {
+            AlertDialog(
+                onDismissRequest = { renameImageIndex = null },
+                title = { Text("重命名图片") },
+                text = {
+                    OutlinedTextField(
+                        value = renameImageDraft,
+                        onValueChange = { renameImageDraft = it.take(64) },
+                        singleLine = true,
+                        label = { Text("图片名") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val current = pendingImages[renameIndex]
+                            val normalized = normalizeAttachmentNames(
+                                pendingImages.mapIndexed { index, item ->
+                                    if (index == renameIndex) renameImageDraft else item.second
+                                }
+                            )
+                            pendingImages[renameIndex] = current.first to normalized[renameIndex]
+                            renameImageIndex = null
+                        }
+                    ) {
+                        Text("保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { renameImageIndex = null }) { Text("取消") }
+                },
+            )
+        }
 
     if (confirmDelete) {
         val count = selectedIds.size
@@ -1531,6 +1859,7 @@ private fun SystemChip(
 @Composable
 private fun AgentTextBubble(
     message: ChatMessage,
+    showAttachments: Boolean = true,
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
     onAvatarClick: (() -> Unit)? = null,
@@ -1550,11 +1879,17 @@ private fun AgentTextBubble(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                SelectionContainer {
-                    Markdown(
-                        content = message.content,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                if (message.content.isNotBlank()) {
+                    SelectionContainer {
+                        Markdown(
+                            content = message.content,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+                if (showAttachments && message.hasAttachments) {
+                    if (message.content.isNotBlank()) Spacer(modifier = Modifier.height(8.dp))
+                    MessageAttachmentStrip(attachments = message.attachments)
                 }
             }
         }
@@ -2194,7 +2529,12 @@ fun TextBubble(
                     }
                 } else if (message.isTransferring) {
                     Text(
-                        text = if (isMine) "Sending text" else "Receiving text",
+                        text = when {
+                            message.hasAttachments && isMine -> "Sending images"
+                            message.hasAttachments -> "Receiving images"
+                            isMine -> "Sending text"
+                            else -> "Receiving text"
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = contentColor,
                     )
@@ -2213,6 +2553,10 @@ fun TextBubble(
                         style = MaterialTheme.typography.labelSmall,
                         color = contentColor.copy(alpha = 0.8f),
                     )
+                }
+                if (message.hasAttachments) {
+                    if (showPreview || message.isTransferring) Spacer(modifier = Modifier.height(8.dp))
+                    MessageAttachmentStrip(attachments = message.attachments)
                 }
             }
         }
@@ -2452,8 +2796,9 @@ fun ImageBubble(
                     .fillMaxSize()
                     .background(Color.Black.copy(alpha = 0.92f))
             ) {
-                MessageImage(
-                    message = message,
+                FullImageContent(
+                    path = imagePath,
+                    explicitBytes = imageBytes,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxSize()

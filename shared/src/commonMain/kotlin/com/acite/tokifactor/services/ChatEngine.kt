@@ -9,6 +9,7 @@ import com.acite.tokifactor.copyFileToPlatformFile
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.AvatarEnvelope
+import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.InboundNotice
@@ -18,6 +19,7 @@ import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.model.PictureChunk
 import com.acite.tokifactor.model.TextChunk
 import com.acite.tokifactor.model.TextEnvelope
+import com.acite.tokifactor.model.WireJson
 import com.acite.tokifactor.model.selectedMember
 import com.acite.tokifactor.model.shouldExpireAki
 import com.acite.tokifactor.model.memberControlMetadata
@@ -160,6 +162,19 @@ class ChatEngine @Inject constructor(
     )
 
     private val incoming = mutableMapOf<String, IncomingBinary>()
+    private class IncomingImageGroup(var expected: Int) {
+        val attachments = mutableMapOf<Int, ChatAttachment>()
+        var envelope: TextEnvelope? = null
+        var metadata: Map<String, String> = emptyMap()
+        var eventAt: Long = 0L
+        var sender: String = ""
+        var senderId: String = ""
+        var sentAt: Long = 0L
+        var timer: Job? = null
+        var expectText: Boolean = false
+    }
+
+    private val incomingImageGroups = mutableMapOf<String, IncomingImageGroup>()
     private val incomingWatchdogs = mutableMapOf<String, Job>()
     private val abortedTransfers = mutableSetOf<String>()
     private val completedTransfers = ConcurrentHashMap.newKeySet<String>()
@@ -756,6 +771,7 @@ class ChatEngine @Inject constructor(
         senderId: String = "",
         id: String = UUID.randomUUID().toString(),
         sentAt: Long = System.currentTimeMillis(),
+        attachments: List<ChatAttachment> = emptyList(),
     ) {
         if (messages.any { it.id == id }) return
         val message = ChatMessage(
@@ -766,6 +782,7 @@ class ChatEngine @Inject constructor(
             senderId = senderId,
             isMine = isMine,
             sentAt = sentAt,
+            attachments = attachments,
         )
         insertMessage(message)
         emitNotice(message)
@@ -775,6 +792,8 @@ class ChatEngine @Inject constructor(
     private fun applyIncomingEnvelope(
         envelope: TextEnvelope,
         receivedAt: Long = System.currentTimeMillis(),
+        attachments: List<ChatAttachment> = emptyList(),
+        deferAttachments: Boolean = true,
     ) {
         val eventAt = envelope.sentAt.takeIf { it > 0L } ?: receivedAt
         val meta = envelope.metadata
@@ -800,6 +819,27 @@ class ChatEngine @Inject constructor(
             )
         }
         val normalized = envelope.copy(sender = senderName, senderId = memberId)
+        val expectedAttachments = meta["attachmentCount"]?.toIntOrNull() ?: 0
+        var resolvedAttachments = attachments
+        if (deferAttachments && expectedAttachments > 0 && resolvedAttachments.isEmpty()) {
+            val imageOnly = messages.firstOrNull {
+                it.id == normalized.messageId && !it.isAgent && it.attachments.isNotEmpty()
+            }
+            if (imageOnly != null) {
+                val removedId = imageOnly.id
+                messages.removeAll { it.id == removedId }
+                emitEvent(ChatEngineEvent.MessagesRemoved(setOf(removedId)))
+                resolvedAttachments = imageOnly.attachments
+            } else {
+                deferAttachmentEnvelope(normalized, meta, expectedAttachments, eventAt)
+                return
+            }
+        }
+        val effectiveAttachments = if (resolvedAttachments.isEmpty() && expectedAttachments > 0) {
+            attachmentPlaceholders(meta, expectedAttachments)
+        } else {
+            resolvedAttachments
+        }
         if (meta["schema"] != "akid.v1") {
             addChatText(
                 normalized.text,
@@ -808,6 +848,7 @@ class ChatEngine @Inject constructor(
                 isMine = isOwnMember(normalized.senderId),
                 id = normalized.messageId.ifBlank { UUID.randomUUID().toString() },
                 sentAt = eventAt,
+                attachments = effectiveAttachments,
             )
             return
         }
@@ -815,7 +856,7 @@ class ChatEngine @Inject constructor(
         val turnId = meta["turnId"].orEmpty()
         val seq = meta["seq"]?.toIntOrNull() ?: 0
         when (kind) {
-            "turn" -> applyAgentTurn(normalized, turnId, seq, eventAt)
+            "turn" -> applyAgentTurn(normalized, turnId, seq, eventAt, effectiveAttachments)
             "tool" -> applyAgentTool(normalized, turnId, seq, eventAt)
             "approval" -> applyAgentApproval(normalized, turnId, seq, eventAt)
             "approval_resolved" -> applyAgentApprovalResolved(normalized, turnId, seq, eventAt)
@@ -823,11 +864,131 @@ class ChatEngine @Inject constructor(
         }
     }
 
+    private fun attachmentPlaceholders(
+        metadata: Map<String, String>,
+        expected: Int,
+    ): List<ChatAttachment> {
+        val ids = metadata["attachmentIds"].orEmpty().split(',').map { it.trim() }
+        val names = metadata["attachmentNames"].orEmpty().split('\n').map { it.trim() }
+        return (0 until expected.coerceIn(0, 4)).map { index ->
+            ChatAttachment(
+                id = ids.getOrNull(index)?.ifBlank { null } ?: "missing-$index",
+                name = names.getOrNull(index)?.ifBlank { null } ?: "图片${index + 1}",
+            )
+        }
+    }
+
+    private fun deferAttachmentEnvelope(
+        envelope: TextEnvelope,
+        metadata: Map<String, String>,
+        expected: Int,
+        eventAt: Long,
+    ) {
+        val messageId = envelope.messageId
+        if (messageId.isBlank()) {
+            applyIncomingEnvelope(envelope, eventAt, emptyList(), false)
+            return
+        }
+        val group = incomingImageGroups.getOrPut(messageId) {
+            IncomingImageGroup(expected.coerceIn(1, 4))
+        }
+        group.expected = maxOf(group.expected, expected.coerceIn(1, 4))
+        group.envelope = envelope
+        group.metadata = metadata
+        group.eventAt = eventAt
+        group.sender = envelope.sender
+        group.senderId = envelope.senderId
+        group.sentAt = envelope.sentAt.takeIf { it > 0L } ?: eventAt
+        if (group.attachments.size >= group.expected) {
+            flushAttachmentGroup(messageId, group)
+        } else {
+            scheduleAttachmentGroupTimeout(messageId, 5_000L)
+        }
+    }
+
+    private fun completeImageAttachment(
+        messageId: String,
+        index: Int,
+        expected: Int,
+        attachment: ChatAttachment,
+        sender: String,
+        senderId: String,
+        sentAt: Long,
+        expectText: Boolean = false,
+    ) {
+        val group = incomingImageGroups.getOrPut(messageId) {
+            IncomingImageGroup(expected.coerceIn(1, 4))
+        }
+        group.expected = maxOf(group.expected, expected.coerceIn(1, 4))
+        group.expectText = group.expectText || expectText
+        group.attachments[index.coerceIn(0, 3)] = attachment
+        group.sender = sender
+        group.senderId = senderId
+        group.sentAt = sentAt
+        if (group.attachments.size >= group.expected) {
+            if (group.envelope != null) {
+                flushAttachmentGroup(messageId, group)
+            } else {
+                scheduleAttachmentGroupTimeout(
+                    messageId,
+                    if (group.expectText) 5_000L else 750L,
+                )
+            }
+        } else {
+            scheduleAttachmentGroupTimeout(messageId, 5_000L)
+        }
+    }
+
+    private fun scheduleAttachmentGroupTimeout(messageId: String, delayMs: Long) {
+        val group = incomingImageGroups[messageId] ?: return
+        group.timer?.cancel()
+        group.timer = scope.launch {
+            delay(delayMs)
+            withContext(Dispatchers.Main) {
+                val current = incomingImageGroups[messageId] ?: return@withContext
+                flushAttachmentGroup(messageId, current)
+            }
+        }
+    }
+
+    private fun flushAttachmentGroup(messageId: String, group: IncomingImageGroup) {
+        group.timer = null
+        incomingImageGroups.remove(messageId)
+        val attachments = group.attachments.toSortedMap().values.toList()
+        val envelope = group.envelope
+        if (envelope != null) {
+            applyIncomingEnvelope(envelope, group.eventAt, attachments, false)
+            return
+        }
+        if (attachments.isEmpty()) return
+        val id = messageId
+        val existing = messages.indexOfFirst { it.id == id }
+        val message = ChatMessage(
+            id = id,
+            content = "",
+            pic = null,
+            sender = group.sender,
+            senderId = resolveIncomingMemberId(group.sender, group.senderId, group.metadata),
+            isMine = isOwnMember(group.senderId),
+            sentAt = group.sentAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
+            attachments = attachments,
+        )
+        if (existing >= 0) {
+            messages[existing] = message.copy(sentAt = messages[existing].sentAt)
+            emitEvent(ChatEngineEvent.MessageUpsert(messages[existing]))
+        } else {
+            insertMessage(message)
+            emitNotice(message)
+        }
+        schedulePersist()
+    }
+
     private fun applyAgentTurn(
         envelope: TextEnvelope,
         turnId: String,
         seq: Int,
         sentAt: Long,
+        attachments: List<ChatAttachment> = emptyList(),
     ) {
         if (turnId.isEmpty()) return
         val phase = envelope.metadata["phase"].orEmpty()
@@ -866,6 +1027,7 @@ class ChatEngine @Inject constructor(
                         markdown = true,
                         status = if (phase == "final") "complete" else "running",
                         sentAt = sentAt,
+                        attachments = attachments,
                     )
                 )
                 if (phase == "final") schedulePersist()
@@ -1044,6 +1206,7 @@ class ChatEngine @Inject constructor(
         if (message.isMine || message.isSystem || message.isError || message.isAgent) return
         val preview = when {
             message.isFile -> message.fileName ?: "File"
+            message.hasAttachments -> message.attachments.first().name
             message.isImage -> "Photo"
             else -> message.content.trim().replace(Regex("\\s+"), " ").take(80).ifBlank { "Message" }
         }
@@ -1092,6 +1255,8 @@ class ChatEngine @Inject constructor(
         incomingWatchdogs.values.forEach { it.cancel() }
         incomingWatchdogs.clear()
         incoming.clear()
+        incomingImageGroups.values.forEach { it.timer?.cancel() }
+        incomingImageGroups.clear()
         abortedTransfers.clear()
         messages.clear()
         try {
@@ -1172,8 +1337,13 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    override fun sendMessage(content: String) {
+    override fun sendMessage(content: String, attachments: List<OutgoingAttachment>) {
         if (!connected) return
+        if (attachments.isNotEmpty()) {
+            sendRichMessage(content, attachments)
+            return
+        }
+        if (content.isBlank()) return
         val utf8 = content.encodeToByteArray()
         if (utf8.size > ChunkedTransfer.TEXT_CHUNK_THRESHOLD_BYTES) {
             sendChunkedText(content, utf8)
@@ -1215,6 +1385,334 @@ class ChatEngine @Inject constructor(
             } catch (_: Exception) {
             }
         }
+    }
+
+    private fun sendRichMessage(content: String, selected: List<OutgoingAttachment>) {
+        if (!connected) return
+        if (selected.isEmpty() || selected.size > 4) {
+            addMessage("Error : a message may contain at most 4 images.", true)
+            return
+        }
+        val senderName = settingsStore.displayName
+        val senderId = settingsStore.memberId
+        val avatarHash = ownAvatarHash()
+        val messageId = UUID.randomUUID().toString()
+        val sentAt = System.currentTimeMillis()
+
+        data class Prepared(
+            val transferId: String,
+            val name: String,
+            val mime: String,
+            val fileSize: Long,
+            val hash: String,
+            val payloadFile: File,
+            val blobPath: String,
+            val total: Int,
+        )
+
+        val job = scope.launch(Dispatchers.IO) {
+            val prepared = mutableListOf<Prepared>()
+            var totalBytes = 0L
+            try {
+                for ((index, outgoing) in selected.withIndex()) {
+                    val transferId = UUID.randomUUID().toString()
+                    val payloadFile = ChunkedTransfer.payloadFile(transferId)
+                    val (fileSize, hash) = ChunkedTransfer.importSource(outgoing.file, payloadFile)
+                    totalBytes += fileSize
+                    if (fileSize <= 0L || fileSize > 8L * 1024L * 1024L) {
+                        ChunkedTransfer.deleteTransfer(transferId)
+                        error("bad-image-size")
+                    }
+                    if (totalBytes > 16L * 1024L * 1024L) {
+                        ChunkedTransfer.deleteTransfer(transferId)
+                        error("image-total-too-large")
+                    }
+                    val name = outgoing.name.trim().ifBlank { "图片${index + 1}" }.take(64)
+                    val chunkSize = ChunkedTransfer.chunkSize(mqttService.getMaximumPacketSize())
+                    val total = ChunkedTransfer.chunkCount(fileSize, chunkSize)
+                    val blobPath = ChatHistoryStore.storeBlobFromFile(transferId, payloadFile)
+                    prepared += Prepared(
+                        transferId = transferId,
+                        name = name,
+                        mime = imageMimeForName(name),
+                        fileSize = fileSize,
+                        hash = hash,
+                        payloadFile = payloadFile,
+                        blobPath = blobPath,
+                        total = total,
+                    )
+                }
+                withContext(Dispatchers.Main) {
+                    insertMessage(
+                        ChatMessage(
+                            id = messageId,
+                            content = content,
+                            pic = null,
+                            sender = senderName,
+                            senderId = senderId,
+                            isMine = true,
+                            sentAt = sentAt,
+                            attachments = prepared.map {
+                                ChatAttachment(
+                                    id = it.transferId,
+                                    name = it.name,
+                                    mime = it.mime,
+                                    filePath = it.blobPath,
+                                    size = it.fileSize,
+                                    isTransferring = true,
+                                    chunksReceived = 0,
+                                    chunksTotal = it.total,
+                                )
+                            },
+                        )
+                    )
+                }
+                prepared.forEachIndexed { index, attachment ->
+                    val chunkSize = ChunkedTransfer.chunkSize(mqttService.getMaximumPacketSize())
+                    val maxPacket = mqttService.getMaximumPacketSize()
+                    publishSlices(
+                        transferId = attachment.transferId,
+                        payloadFile = attachment.payloadFile,
+                        fileSize = attachment.fileSize,
+                        chunkSize = chunkSize,
+                        total = attachment.total,
+                        maxPacket = maxPacket,
+                        topic = "tokifactor/picture",
+                        encodeChunk = { chunkIndex, encryptedB64 ->
+                            PictureChunk(
+                                transferId = attachment.transferId,
+                                index = chunkIndex,
+                                total = attachment.total,
+                                hash = attachment.hash,
+                                encryptedData = encryptedB64,
+                                sender = senderName,
+                                senderId = senderId,
+                                avatarHash = avatarHash,
+                                messageId = messageId,
+                                attachmentIndex = index,
+                                attachmentCount = prepared.size,
+                                textCommit = content.isNotBlank(),
+                                sentAt = sentAt,
+                                size = attachment.fileSize,
+                                captionEncrypted = encryptCaption(attachment.name),
+                            ).encode()
+                        },
+                        onProgress = { completed, total ->
+                            updateAttachmentProgress(messageId, attachment.transferId, completed, total)
+                        },
+                    )
+                    withContext(Dispatchers.Main) {
+                        updateMessage(messageId) { message ->
+                            message.copy(
+                                attachments = message.attachments.map { item ->
+                                    if (item.id == attachment.transferId) {
+                                        item.copy(
+                                            filePath = attachment.blobPath,
+                                            isTransferring = false,
+                                            chunksReceived = attachment.total,
+                                            chunksTotal = attachment.total,
+                                        )
+                                    } else item
+                                }
+                            )
+                        }
+                    }
+                    ChunkedTransfer.deleteTransfer(attachment.transferId)
+                }
+                if (content.isNotBlank()) {
+                    publishRichText(
+                        content,
+                        messageId,
+                        sentAt,
+                        prepared.map {
+                            ChatAttachment(
+                                id = it.transferId,
+                                name = it.name,
+                                mime = it.mime,
+                                filePath = it.blobPath,
+                                size = it.fileSize,
+                            )
+                        },
+                    )
+                }
+                withContext(Dispatchers.Main) {
+                    updateMessage(messageId) { message ->
+                        message.copy(attachments = message.attachments.map { it.copy(isTransferring = false) })
+                    }
+                }
+                schedulePersist()
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    prepared.forEach { attachment ->
+                        publishAbort(
+                            TransferKind.Image,
+                            attachment.transferId,
+                            senderName,
+                            senderId,
+                            "cancel",
+                        )
+                        ChunkedTransfer.deleteTransfer(attachment.transferId)
+                    }
+                    withContext(Dispatchers.Main) {
+                        replaceMessage(
+                            messageId,
+                            ChatMessage(
+                                id = messageId,
+                                content = "Cancelled sending image message.",
+                                pic = null,
+                                isSystem = true,
+                            ),
+                        )
+                    }
+                }
+                throw e
+            } catch (t: Throwable) {
+                prepared.forEach { attachment ->
+                    publishAbort(
+                        TransferKind.Image,
+                        attachment.transferId,
+                        senderName,
+                        senderId,
+                        "fail",
+                    )
+                    ChunkedTransfer.deleteTransfer(attachment.transferId)
+                }
+                withContext(Dispatchers.Main) {
+                    replaceMessage(
+                        messageId,
+                        ChatMessage(
+                            id = messageId,
+                            content = when (t.message) {
+                                "bad-image-size" -> "Error : each image must be between 1 byte and 8 MiB."
+                                "image-total-too-large" -> "Error : images exceed the 16 MiB message limit."
+                                else -> "Error : failed to send image message."
+                            },
+                            pic = null,
+                            isError = true,
+                            isSystem = true,
+                        ),
+                    )
+                }
+            } finally {
+                outgoingJobs.remove(messageId)
+            }
+        }
+        outgoingJobs[messageId] = job
+    }
+
+    private suspend fun publishRichText(
+        content: String,
+        messageId: String,
+        sentAt: Long,
+        attachments: List<ChatAttachment>,
+    ) {
+        val metadata = attachmentMetadata(attachments)
+        val utf8 = content.encodeToByteArray()
+        if (utf8.size <= ChunkedTransfer.TEXT_CHUNK_THRESHOLD_BYTES) {
+            val envelope = TextEnvelope(
+                sender = settingsStore.displayName,
+                text = content,
+                senderId = settingsStore.memberId,
+                avatarHash = ownAvatarHash(),
+                messageId = messageId,
+                sentAt = sentAt,
+                metadata = metadata,
+            ).encode()
+            val encrypted = SecureMessageChannel.encrypt(
+                envelope.encodeToByteArray(), settingsStore.magicString,
+            )
+            mqttService.publish("tokifactor/text", Base64.encode(encrypted))
+            return
+        }
+        val payloadFile = ChunkedTransfer.payloadFile(messageId)
+        val (fileSize, hash) = ChunkedTransfer.importBytes(utf8, payloadFile)
+        val chunkSize = ChunkedTransfer.chunkSize(mqttService.getMaximumPacketSize())
+        val total = ChunkedTransfer.chunkCount(fileSize, chunkSize)
+        publishSlices(
+            transferId = messageId,
+            payloadFile = payloadFile,
+            fileSize = fileSize,
+            chunkSize = chunkSize,
+            total = total,
+            maxPacket = mqttService.getMaximumPacketSize(),
+            topic = "tokifactor/text",
+            encodeChunk = { index, encryptedB64 ->
+                TextChunk(
+                    transferId = messageId,
+                    index = index,
+                    total = total,
+                    hash = hash,
+                    encryptedData = encryptedB64,
+                    sender = settingsStore.displayName,
+                    senderId = settingsStore.memberId,
+                    avatarHash = ownAvatarHash(),
+                    messageId = messageId,
+                    sentAt = sentAt,
+                    size = fileSize,
+                    metadata = metadata + mapOf(
+                        "memberId" to settingsStore.memberId,
+                        "memberName" to settingsStore.displayName,
+                    ),
+                ).encode()
+            },
+            onProgress = { _, _ -> },
+        )
+        ChunkedTransfer.deleteTransfer(messageId)
+    }
+
+    private fun attachmentMetadata(attachments: List<ChatAttachment>): Map<String, String> {
+        val values = attachments
+        if (values.isEmpty()) return emptyMap()
+        val json = values.joinToString(prefix = "[", postfix = "]") {
+            WireJson.encodeObject(
+                "id" to it.id,
+                "name" to it.name,
+                "mime" to it.mime,
+                "bytes" to it.size.toString(),
+            )
+        }
+        return mapOf(
+            "attachmentCount" to values.size.toString(),
+            "attachmentIds" to values.joinToString(",") { it.id },
+            "attachmentNames" to values.joinToString("\n") { it.name },
+            "attachments" to json,
+            "memberId" to settingsStore.memberId,
+            "memberName" to settingsStore.displayName,
+        )
+    }
+
+    private fun updateAttachmentProgress(
+        messageId: String,
+        attachmentId: String,
+        completed: Int,
+        total: Int,
+    ) {
+        val index = messages.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+        val message = messages[index]
+        messages[index] = message.copy(
+            attachments = message.attachments.map { attachment ->
+                if (attachment.id == attachmentId) {
+                    attachment.copy(chunksReceived = completed, chunksTotal = total)
+                } else attachment
+            }
+        )
+        emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
+    }
+
+    private fun encryptCaption(caption: String): String =
+        Base64.encode(
+            SecureMessageChannel.encrypt(
+                caption.encodeToByteArray(),
+                settingsStore.magicString,
+            )
+        )
+
+    private fun imageMimeForName(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        else -> "image/png"
     }
 
     private fun sendChunkedText(content: String, utf8: ByteArray) {
@@ -1328,11 +1826,7 @@ class ChatEngine @Inject constructor(
     }
 
     override fun sendPicture(file: PlatformFile) {
-        sendBinary(
-            file = file,
-            asFile = false,
-            failLabel = "image",
-        )
+        sendMessage("", listOf(OutgoingAttachment(file, file.name)))
     }
 
     override fun sendFile(file: PlatformFile) {
@@ -1502,6 +1996,7 @@ class ChatEngine @Inject constructor(
         total: Int,
         maxPacket: Int?,
         topic: String,
+        onProgress: ((completed: Int, total: Int) -> Unit)? = null,
         encodeChunk: (index: Int, encryptedB64: String) -> String,
     ) {
         val completed = AtomicInteger(0)
@@ -1523,9 +2018,13 @@ class ChatEngine @Inject constructor(
                         }
                         mqttService.publish(topic, payload)
                         val n = completed.incrementAndGet()
-                        withContext(Dispatchers.Main) {
-                            updateMessage(transferId) {
-                                it.copy(chunksReceived = n, chunksTotal = total)
+                        if (onProgress != null) {
+                            withContext(Dispatchers.Main) { onProgress(n, total) }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                updateMessage(transferId) {
+                                    it.copy(chunksReceived = n, chunksTotal = total)
+                                }
                             }
                         }
                     }
@@ -1579,6 +2078,10 @@ class ChatEngine @Inject constructor(
             sentAt = chunk.sentAt,
             receivedAt = receivedAt,
             caption = decryptPictureCaption(chunk.captionEncrypted),
+            messageId = chunk.messageId.ifBlank { chunk.transferId },
+            attachmentIndex = chunk.attachmentIndex,
+            attachmentCount = chunk.attachmentCount,
+            textCommit = chunk.textCommit,
         )
     }
 
@@ -1657,6 +2160,9 @@ class ChatEngine @Inject constructor(
         receivedAt: Long = System.currentTimeMillis(),
         caption: String = "",
         metadata: Map<String, String> = emptyMap(),
+        attachmentIndex: Int = 0,
+        attachmentCount: Int = 1,
+        textCommit: Boolean = false,
     ) {
         val messageAt = sentAt.takeIf { it > 0L } ?: receivedAt
         val memberId = resolveIncomingMemberId(sender, senderId, metadata)
@@ -1703,19 +2209,32 @@ class ChatEngine @Inject constructor(
         }
 
         val complete = withContext(Dispatchers.Main) {
-            noteIncomingChunk(
-                transferId = transferId,
-                index = index,
-                total = total,
-                hash = hash,
-                sender = sender,
-                senderId = memberId,
-                fileName = fileName,
-                fileSize = fileSize,
-                isChunkedText = isChunkedText,
-                sentAt = messageAt,
-                caption = caption,
-            )
+            if (!isChunkedText && fileName == null && messageId.isNotBlank()) {
+                noteIncomingAttachmentChunk(
+                    transferId = transferId,
+                    index = index,
+                    total = total,
+                    hash = hash,
+                    sender = sender,
+                    senderId = memberId,
+                    sentAt = messageAt,
+                    caption = caption,
+                )
+            } else {
+                noteIncomingChunk(
+                    transferId = transferId,
+                    index = index,
+                    total = total,
+                    hash = hash,
+                    sender = sender,
+                    senderId = memberId,
+                    fileName = fileName,
+                    fileSize = fileSize,
+                    isChunkedText = isChunkedText,
+                    sentAt = messageAt,
+                    caption = caption,
+                )
+            }
         }
         if (!complete) return
 
@@ -1784,6 +2303,33 @@ class ChatEngine @Inject constructor(
                 return
             }
             val asFile = fileName != null || size > ChunkedTransfer.PREVIEW_MAX_BYTES
+            if (!isChunkedText && fileName == null && messageId.isNotBlank()) {
+                val clear = dest.readBytes()
+                val blobPath = ChatHistoryStore.storeBlobFromFile(transferId, dest)
+                ChunkedTransfer.deleteTransfer(transferId)
+                val name = caption.ifBlank { "图片${attachmentIndex + 1}" }
+                val attachment = ChatAttachment(
+                    id = transferId,
+                    name = name,
+                    mime = imageMime(clear, name),
+                    filePath = blobPath,
+                    size = size,
+                )
+                withContext(Dispatchers.Main) {
+                    completeImageAttachment(
+                        messageId = messageId,
+                        index = attachmentIndex,
+                        expected = attachmentCount,
+                        attachment = attachment,
+                        sender = sender,
+                        senderId = memberId,
+                        sentAt = messageAt,
+                        expectText = textCommit,
+                    )
+                }
+                completedTransfers.add(transferId)
+                return
+            }
             val preview = if (!asFile) dest.readBytes() else null
             val displayName = fileName ?: if (asFile) "image.bin" else null
             val blobPath = ChatHistoryStore.storeBlobFromFile(transferId, dest)
@@ -1904,6 +2450,59 @@ class ChatEngine @Inject constructor(
         cancelIncomingWatchdog(transferId)
         incoming.remove(transferId)
         return true
+    }
+
+    private fun noteIncomingAttachmentChunk(
+        transferId: String,
+        index: Int,
+        total: Int,
+        hash: String,
+        sender: String,
+        senderId: String,
+        sentAt: Long,
+        caption: String,
+    ): Boolean {
+        if (transferId in abortedTransfers) return false
+        val transfer = incoming[transferId]
+        if (transfer != null && (transfer.hash != hash || transfer.total != total)) {
+            return false
+        }
+        val state = transfer ?: IncomingBinary(
+            hash = hash,
+            total = total,
+            sender = sender,
+            senderId = senderId,
+            fileName = null,
+            fileSize = 0,
+            sentAt = sentAt,
+            received = BooleanArray(total),
+            caption = caption,
+        ).also { incoming[transferId] = it }
+        if (caption.isNotBlank() && state.caption.isBlank()) state.caption = caption
+        if (index < 0 || index >= state.received.size) return false
+        if (!state.received[index]) {
+            state.received[index] = true
+            state.count++
+        }
+        bumpIncomingWatchdog(transferId)
+        if (state.count < total) return false
+        cancelIncomingWatchdog(transferId)
+        incoming.remove(transferId)
+        return true
+    }
+
+    private fun imageMime(bytes: ByteArray, name: String = ""): String {
+        if (bytes.size >= 8 && bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte()) return "image/png"
+        if (bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()) return "image/jpeg"
+        if (bytes.size >= 6 && bytes[0] == 'G'.code.toByte() && bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte()
+        ) return "image/gif"
+        if (bytes.size >= 12 && bytes[0] == 'R'.code.toByte() && bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte() && bytes[3] == 'F'.code.toByte() &&
+            bytes[8] == 'W'.code.toByte() && bytes[9] == 'E'.code.toByte() &&
+            bytes[10] == 'B'.code.toByte() && bytes[11] == 'P'.code.toByte()
+        ) return "image/webp"
+        return imageMimeForName(name)
     }
 
     private fun bumpIncomingWatchdog(transferId: String) {

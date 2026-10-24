@@ -2,6 +2,7 @@ package com.acite.tokifactor.daemon
 
 import com.acite.tokifactor.services.ChatEngine
 import com.acite.tokifactor.services.SettingsStore
+import com.acite.tokifactor.services.OutgoingAttachment
 import io.github.vinceglb.filekit.core.PlatformFile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -21,7 +22,16 @@ class DaemonCommandHandler(
     override suspend fun handle(frame: DaemonClientFrame): DaemonCommandResult = try {
         when (frame.command) {
             DaemonProtocol.COMMAND_SEND_TEXT -> withContext(Dispatchers.Main) {
-                engine.sendMessage(frame.text)
+                engine.sendMessage(
+                    frame.text,
+                    frame.attachmentPaths.mapIndexed { index, path ->
+                        OutgoingAttachment(
+                            File(path).let { PlatformFile(it) },
+                            frame.attachmentNames.getOrNull(index)?.ifBlank { null }
+                                ?: File(path).name,
+                        )
+                    },
+                )
             }
             DaemonProtocol.COMMAND_SEND_FILE -> withContext(Dispatchers.Main) {
                 engine.sendFile(PlatformFile(File(frame.path)))

@@ -30,21 +30,31 @@ data class ChatMessage(
     val details: String = "",
     val status: String = "",
     val sentAt: Long = 0L,
+    val attachments: List<ChatAttachment> = emptyList(),
 ) {
     val isAgent: Boolean
         get() = agentKind.isNotEmpty()
 
     val isTransferring: Boolean
-        get() = chunksTotal > 0 && chunksReceived < chunksTotal
+        get() = (chunksTotal > 0 && chunksReceived < chunksTotal) ||
+            attachments.any { it.isTransferring }
 
     val transferProgress: Float
-        get() = if (chunksTotal <= 0) 1f else chunksReceived.toFloat() / chunksTotal.toFloat()
+        get() {
+            if (attachments.isNotEmpty()) {
+                return attachments.map { it.progress }.average().toFloat()
+            }
+            return if (chunksTotal <= 0) 1f else chunksReceived.toFloat() / chunksTotal.toFloat()
+        }
 
     val isFile: Boolean
         get() = fileName != null
 
     val isImage: Boolean
-        get() = !isFile && !isChunkedText && (pic != null || filePath != null || chunksTotal > 0)
+        get() = attachments.isEmpty() && !isFile && !isChunkedText && (pic != null || filePath != null || chunksTotal > 0)
+
+    val hasAttachments: Boolean
+        get() = attachments.isNotEmpty()
 
     val shouldPersist: Boolean
         get() {
@@ -99,6 +109,7 @@ data class ChatMessage(
         if (details != other.details) return false
         if (status != other.status) return false
         if (sentAt != other.sentAt) return false
+        if (attachments != other.attachments) return false
         if (!pic.contentEquals(other.pic)) return false
         if (!fileBytes.contentEquals(other.fileBytes)) return false
 
@@ -133,6 +144,7 @@ data class ChatMessage(
         result = 31 * result + details.hashCode()
         result = 31 * result + status.hashCode()
         result = 31 * result + sentAt.hashCode()
+        result = 31 * result + attachments.hashCode()
         result = 31 * result + (pic?.contentHashCode() ?: 0)
         result = 31 * result + (fileBytes?.contentHashCode() ?: 0)
         return result
