@@ -10,6 +10,65 @@ import kotlin.test.assertTrue
 
 class ChatHistoryAttachmentTest {
     @Test
+    fun newAttachmentBlobSurvivesPersistAndKeepsItsCanonicalPath() {
+        val oldHome = System.getProperty("user.home")
+        val home = Files.createTempDirectory("tokifactor-attachment-blob").toFile()
+        val source = Files.createTempFile("tokifactor-attachment-source-", ".png").toFile()
+        source.writeBytes(byteArrayOf(9, 8, 7, 6))
+        try {
+            System.setProperty("user.home", home.absolutePath)
+            ChatHistoryStore.clear()
+
+            val storedPath = ChatHistoryStore.storeAttachmentBlobFromFile(
+                messageId = "message-2",
+                index = 0,
+                attachmentId = "attachment-2",
+                source = source,
+            )
+            assertTrue(java.io.File(storedPath).isFile)
+
+            ChatHistoryStore.save(emptyList())
+            assertTrue(
+                java.io.File(storedPath).isFile,
+                "a new attachment must survive a persist that raced ahead of its message snapshot",
+            )
+
+            ChatHistoryStore.save(
+                listOf(
+                    ChatMessage(
+                        id = "message-2",
+                        content = "",
+                        pic = null,
+                        attachments = listOf(
+                            ChatAttachment(
+                                id = "attachment-2",
+                                name = "图片1",
+                                mime = "image/png",
+                                filePath = storedPath,
+                                size = 4,
+                            )
+                        ),
+                    )
+                )
+            )
+
+            val loadedPath = ChatHistoryStore.load().single().attachments.single().filePath
+            assertEquals(storedPath, loadedPath)
+            val path = requireNotNull(loadedPath)
+            assertTrue(java.io.File(path).isFile)
+            assertEquals(listOf<Byte>(9, 8, 7, 6), java.io.File(path).readBytes().toList())
+        } finally {
+            check(System.getProperty("user.home") == home.absolutePath) {
+                "refusing to clear history outside the test home"
+            }
+            ChatHistoryStore.clear()
+            System.setProperty("user.home", oldHome)
+            home.deleteRecursively()
+            source.delete()
+        }
+    }
+
+    @Test
     fun mixedMessageAttachmentsSurvivePersistenceWithLocalBlobs() {
         val oldHome = System.getProperty("user.home")
         val home = Files.createTempDirectory("tokifactor-history-attachments").toFile()

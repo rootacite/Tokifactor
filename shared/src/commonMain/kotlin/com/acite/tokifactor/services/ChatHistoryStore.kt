@@ -9,6 +9,8 @@ import com.acite.tokifactor.model.WireJson
 import java.io.File
 
 object ChatHistoryStore {
+    private val pendingBlobNames = mutableSetOf<String>()
+
     @Synchronized
     fun load(): List<ChatMessage> {
         val index = appHistoryIndexFile()
@@ -48,6 +50,8 @@ object ChatHistoryStore {
                 append('\n')
             }
         }
+        val referenced = keep.toSet()
+        keep.addAll(pendingBlobNames)
         val dest = appHistoryIndexFile()
         val tmp = File(dir, "index.jsonl.tmp")
         tmp.writeText(body)
@@ -58,20 +62,25 @@ object ChatHistoryStore {
         blobs.listFiles()?.forEach { file ->
             if (file.name !in keep) file.delete()
         }
+        pendingBlobNames.removeAll(referenced)
     }
 
     @Synchronized
     fun clear() {
+        pendingBlobNames.clear()
         appHistoryDir().deleteRecursively()
     }
 
     @Synchronized
     fun deleteBlob(id: String) {
+        val name = blobName(id)
+        val prefix = name + "__"
         blobFile(id).delete()
-        val prefix = blobName(id) + "__"
         appHistoryBlobsDir().listFiles()?.forEach { file ->
             if (file.name.startsWith(prefix)) file.delete()
         }
+        pendingBlobNames.remove(name)
+        pendingBlobNames.removeAll { it.startsWith(prefix) }
     }
 
     fun storeBlobFromFile(id: String, source: File): String {
@@ -80,6 +89,22 @@ object ChatHistoryStore {
         if (source.exists() && source.canonicalFile != dest.canonicalFile) {
             source.copyTo(dest, overwrite = true)
         }
+        return dest.absolutePath
+    }
+
+    @Synchronized
+    fun storeAttachmentBlobFromFile(
+        messageId: String,
+        index: Int,
+        attachmentId: String,
+        source: File,
+    ): String {
+        val dest = attachmentBlobFile(messageId, index, attachmentId)
+        dest.parentFile?.mkdirs()
+        if (source.exists() && source.canonicalFile != dest.canonicalFile) {
+            source.copyTo(dest, overwrite = true)
+        }
+        pendingBlobNames.add(dest.name)
         return dest.absolutePath
     }
 

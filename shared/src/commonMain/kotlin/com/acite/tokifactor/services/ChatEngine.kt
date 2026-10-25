@@ -1856,7 +1856,12 @@ class ChatEngine @Inject constructor(
                     val name = outgoing.name.trim().ifBlank { "图片${index + 1}" }.take(64)
                     val chunkSize = ChunkedTransfer.chunkSize(mqttService.getMaximumPacketSize())
                     val total = ChunkedTransfer.chunkCount(fileSize, chunkSize)
-                    val blobPath = ChatHistoryStore.storeBlobFromFile(transferId, payloadFile)
+                    val blobPath = ChatHistoryStore.storeAttachmentBlobFromFile(
+                        messageId = messageId,
+                        index = index,
+                        attachmentId = transferId,
+                        source = payloadFile,
+                    )
                     prepared += Prepared(
                         transferId = transferId,
                         name = name,
@@ -1982,6 +1987,7 @@ class ChatEngine @Inject constructor(
                         )
                         ChunkedTransfer.deleteTransfer(attachment.transferId)
                     }
+                    ChatHistoryStore.deleteBlob(messageId)
                     withContext(Dispatchers.Main) {
                         replaceMessage(
                             messageId,
@@ -2006,6 +2012,7 @@ class ChatEngine @Inject constructor(
                     )
                     ChunkedTransfer.deleteTransfer(attachment.transferId)
                 }
+                ChatHistoryStore.deleteBlob(messageId)
                 withContext(Dispatchers.Main) {
                     replaceMessage(
                         messageId,
@@ -2760,7 +2767,12 @@ class ChatEngine @Inject constructor(
             val asFile = fileName != null || size > ChunkedTransfer.PREVIEW_MAX_BYTES
             if (!isChunkedText && fileName == null && messageId.isNotBlank()) {
                 val clear = dest.readBytes()
-                val blobPath = ChatHistoryStore.storeBlobFromFile(transferId, dest)
+                val blobPath = ChatHistoryStore.storeAttachmentBlobFromFile(
+                    messageId = messageId,
+                    index = attachmentIndex,
+                    attachmentId = transferId,
+                    source = dest,
+                )
                 ChunkedTransfer.deleteTransfer(transferId)
                 val name = caption.ifBlank { "图片${attachmentIndex + 1}" }
                 val attachment = ChatAttachment(
