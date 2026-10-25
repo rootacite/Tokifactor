@@ -41,6 +41,7 @@ class DaemonProtocolTest {
             description = "Aki bio",
             memberKind = "agent",
             queueDepth = 2,
+            waitingUser = true,
         )
         val frame = DaemonServerFrame(
             type = DaemonProtocol.TYPE_SNAPSHOT,

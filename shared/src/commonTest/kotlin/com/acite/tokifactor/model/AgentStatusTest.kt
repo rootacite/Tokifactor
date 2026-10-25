@@ -11,6 +11,7 @@ class AgentStatusTest {
         assertEquals("Online", base.statusLabel())
         assertEquals("Backend not ready", base.copy(backendReady = false).statusLabel())
         assertEquals("Queued · 2", base.copy(queueDepth = 2).statusLabel())
+        assertEquals("Waiting for you", base.copy(waitingUser = true).statusLabel())
         assertEquals(
             "Replying…",
             base.copy(queueDepth = 2, activeTurn = true).statusLabel(),
@@ -106,6 +107,7 @@ class AgentStatusTest {
             "sandboxReady" to "true",
             "queueDepth" to "2",
             "activeTurn" to "false",
+            "waitingUser" to "true",
             "pendingApprovals" to "1",
             "uptimeS" to "42",
             "memoryTokens" to "7",

@@ -374,9 +374,13 @@ internal sealed class ChatDisplayItem {
 
     sealed class MessageItem : ChatDisplayItem() {
         abstract val message: ChatMessage
+        abstract val staged: Boolean
     }
 
-    data class Single(override val message: ChatMessage) : MessageItem() {
+    data class Single(
+        override val message: ChatMessage,
+        override val staged: Boolean = false,
+    ) : MessageItem() {
         override val key: String = "message:${message.id}"
     }
 
@@ -384,6 +388,7 @@ internal sealed class ChatDisplayItem {
         override val message: ChatMessage,
         val index: Int,
         val isLast: Boolean,
+        override val staged: Boolean = false,
     ) : MessageItem() {
         override val key: String = "text-part:${message.id}:$index"
     }
@@ -394,6 +399,7 @@ internal sealed class ChatDisplayItem {
         val asset: EmojiAsset,
         val index: Int,
         val isLast: Boolean,
+        override val staged: Boolean = false,
     ) : MessageItem() {
         override val key: String = "emoji:${message.id}:$index"
     }
@@ -414,11 +420,13 @@ private data class MemberProfileTarget(
 internal fun buildChatDisplayItems(
     messages: List<ChatMessage>,
     emojiCatalog: EmojiCatalog,
+    stagedIds: Set<String> = emptySet(),
 ): List<ChatDisplayItem> {
     val items = mutableListOf<ChatDisplayItem>()
     var index = 0
     while (index < messages.size) {
         val message = messages[index]
+        val staged = message.id in stagedIds
         if (message.isAgent &&
             message.agentKind == "turn" &&
             message.phase == "started" &&
@@ -444,17 +452,14 @@ internal fun buildChatDisplayItems(
                     segments.forEachIndexed { segmentIndex, segment ->
                         when (segment) {
                             is EmojiContentSegment.Text -> {
-                                val paragraphs = if (isAgentTurn) {
-                                    splitAgentParagraphs(segment.text)
-                                } else {
-                                    listOf(segment.text)
-                                }
+                                val paragraphs = splitMessageParagraphs(segment.text)
                                 paragraphs.forEachIndexed { partIndex, paragraph ->
                                     items += ChatDisplayItem.TextPart(
                                         message = message.copy(content = paragraph),
                                         index = displayIndex++,
                                         isLast = segmentIndex == segments.lastIndex &&
                                             partIndex == paragraphs.lastIndex,
+                                        staged = staged,
                                     )
                                 }
                             }
@@ -465,15 +470,28 @@ internal fun buildChatDisplayItems(
                                     asset = segment.asset,
                                     index = displayIndex++,
                                     isLast = segmentIndex == segments.lastIndex,
+                                    staged = staged,
                                 )
                             }
                         }
                     }
                 } else {
-                    items += ChatDisplayItem.Single(message)
+                    val paragraphs = splitMessageParagraphs(message.content)
+                    if (paragraphs.size > 1) {
+                        paragraphs.forEachIndexed { partIndex, paragraph ->
+                            items += ChatDisplayItem.TextPart(
+                                message = message.copy(content = paragraph),
+                                index = partIndex,
+                                isLast = partIndex == paragraphs.lastIndex,
+                                staged = staged,
+                            )
+                        }
+                    } else {
+                        items += ChatDisplayItem.Single(message, staged)
+                    }
                 }
             } else {
-                items += ChatDisplayItem.Single(message)
+                items += ChatDisplayItem.Single(message, staged)
             }
             index += 1
             continue
@@ -509,6 +527,7 @@ fun MainPage(
 ) {
     var inputText by remember { mutableStateOf("") }
     val pendingImages = remember { mutableStateListOf<Pair<PlatformFile, String>>() }
+    val partialFragments = remember { mutableStateListOf<String>() }
     var renameImageIndex by remember { mutableStateOf<Int?>(null) }
     var renameImageDraft by remember { mutableStateOf("") }
     var showEmojiPicker by remember { mutableStateOf(false) }
@@ -594,6 +613,38 @@ fun MainPage(
         )
     }
 
+    fun stageComposerFragment(fragment: String) {
+        val text = fragment.trim()
+        if (text.isNotEmpty()) partialFragments += text
+    }
+
+    fun stageInputFragment() {
+        val text = inputText.trim()
+        if (text.isEmpty()) return
+        partialFragments += text
+        inputText = ""
+    }
+
+    fun stageEmojiFragment(asset: EmojiAsset) {
+        stageInputFragment()
+        stageComposerFragment(emojiToken(asset))
+        showEmojiPicker = false
+    }
+
+    fun sendComposerMessage() {
+        if (!canWrite || !viewModel.connected) return
+        val names = normalizeAttachmentNames(pendingImages.map { it.second })
+        val attachments = pendingImages.mapIndexed { index, item ->
+            OutgoingAttachment(item.first, names[index])
+        }
+        val content = assemblePartialMessage(partialFragments.toList(), inputText)
+        if (content.isBlank() && attachments.isEmpty()) return
+        viewModel.sendMessage(content, attachments)
+        inputText = ""
+        partialFragments.clear()
+        pendingImages.clear()
+    }
+
     fun messageAvatar(message: ChatMessage): ByteArray? =
         viewModel.peerAvatars[message.senderId]
 
@@ -626,14 +677,46 @@ fun MainPage(
         }
     }
 
-    val displayItems by remember(viewModel.messages, emojiCatalog) {
-        derivedStateOf { buildChatDisplayItems(viewModel.messages, emojiCatalog) }
+    val partialSnapshot = partialFragments.toList()
+    val stagedDisplayItems = remember(
+        partialSnapshot,
+        emojiCatalog,
+        viewModel.currentConversationId,
+        viewModel.displayName,
+        viewModel.memberId,
+    ) {
+        val stagedMessages = partialSnapshot.mapIndexed { index, content ->
+            ChatMessage(
+                id = "draft:${viewModel.currentConversationId}:$index",
+                content = content,
+                pic = null,
+                conversationId = viewModel.currentConversationId,
+                sender = viewModel.displayName,
+                senderId = viewModel.memberId,
+                isMine = true,
+                sentAt = System.currentTimeMillis(),
+            )
+        }
+        buildChatDisplayItems(
+            messages = stagedMessages,
+            emojiCatalog = emojiCatalog,
+            stagedIds = stagedMessages.map { it.id }.toSet(),
+        )
+    }
+    val displayItems by remember(viewModel.messages, emojiCatalog, stagedDisplayItems) {
+        derivedStateOf {
+            buildChatDisplayItems(viewModel.messages, emojiCatalog) + stagedDisplayItems
+        }
     }
     val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(Unit) {
         viewModel.refreshSettings()
         emojiCatalog = EmojiRepository.catalog()
+    }
+
+    LaunchedEffect(viewModel.currentConversationId, canWrite) {
+        partialFragments.clear()
     }
 
     var lastScrolledConversation by remember { mutableStateOf<String?>(null) }
@@ -721,11 +804,14 @@ fun MainPage(
             ) { item ->
                 val ids = displayItemIds(item)
                 val selected = ids.isNotEmpty() && ids.all { it in selectedIds }
+                val staged = (item as? ChatDisplayItem.MessageItem)?.staged == true
                 SelectableMessageRow(
-                    selected = selected,
-                    selectionMode = selectionMode,
+                    selected = !staged && selected,
+                    selectionMode = selectionMode && !staged,
                     onToggle = { toggleSelected(item) },
                     onLongPress = { enterSelection(item) },
+                    selectable = !staged,
+                    alpha = if (staged) 0.45f else 1f,
                 ) {
                     when (item) {
                         is ChatDisplayItem.ToolGroup -> AgentToolGroupCard(
@@ -1072,18 +1158,13 @@ fun MainPage(
 
                 SendActionButton(
                     connected = viewModel.connected,
-                    canSend = canWrite && viewModel.connected && (inputText.isNotBlank() || pendingImages.isNotEmpty()),
-                    onSend = {
-                        val names = normalizeAttachmentNames(pendingImages.map { it.second })
-                        viewModel.sendMessage(
-                            inputText.trim(),
-                            pendingImages.mapIndexed { index, item ->
-                                OutgoingAttachment(item.first, names[index])
-                            },
-                        )
-                        inputText = ""
-                        pendingImages.clear()
-                    },
+                    canSend = canWrite && viewModel.connected &&
+                        (inputText.isNotBlank() || partialFragments.isNotEmpty() || pendingImages.isNotEmpty()),
+                    canStage = canWrite && viewModel.connected && inputText.isNotBlank(),
+                    hasStaged = partialFragments.isNotEmpty(),
+                    onStage = { stageInputFragment() },
+                    onCancelStaged = { partialFragments.clear() },
+                    onSend = { sendComposerMessage() },
                     onPickFile = { filePickerLauncher.launch() },
                     onPickPhoto = { imagePickerLauncher.launch() },
                     onOpenSettings = onOpenSettings,
@@ -1257,9 +1338,10 @@ fun MainPage(
             onDismiss = { showEmojiPicker = false },
             onSelect = { asset ->
                 if (viewModel.connected && canWrite) {
-                    viewModel.sendMessage(emojiToken(asset))
+                    stageEmojiFragment(asset)
+                } else {
+                    showEmojiPicker = false
                 }
-                showEmojiPicker = false
             },
         )
     }
@@ -1326,7 +1408,7 @@ fun MainPage(
 
 }
 
-private enum class MenuAction { File, Photo, Settings }
+private enum class MenuAction { File, Photo, Settings, CancelStaged }
 
 private enum class ComposerDragLock { None, Send, Menu, Ignore }
 
@@ -1467,10 +1549,26 @@ private fun MemberChip(
     onShowProfile: () -> Unit,
 ) {
     val colors = tokiColors
+    val waiting = member.waitingUser
     TokiSurface(
+        modifier = if (waiting) {
+            Modifier
+                .border(2.dp, colors.accentBlue.copy(alpha = 0.55f), RoundedCornerShape(50))
+                .padding(2.dp)
+        } else {
+            Modifier
+        },
         shape = RoundedCornerShape(50),
-        color = if (selected) colors.accentPink.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.045f),
-        borderColor = if (selected) colors.accentPink.copy(alpha = 0.34f) else colors.stroke.copy(alpha = 0.44f),
+        color = when {
+            waiting -> colors.accentBlue.copy(alpha = 0.12f)
+            selected -> colors.accentPink.copy(alpha = 0.18f)
+            else -> Color.White.copy(alpha = 0.045f)
+        },
+        borderColor = when {
+            waiting -> colors.accentBlue.copy(alpha = 0.88f)
+            selected -> colors.accentPink.copy(alpha = 0.34f)
+            else -> colors.stroke.copy(alpha = 0.44f)
+        },
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1633,6 +1731,10 @@ private fun StatusBadge(
 private fun SendActionButton(
     connected: Boolean,
     canSend: Boolean,
+    canStage: Boolean,
+    hasStaged: Boolean,
+    onStage: () -> Unit,
+    onCancelStaged: () -> Unit,
     onSend: () -> Unit,
     onPickFile: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -1649,6 +1751,10 @@ private fun SendActionButton(
 
     val currentConnected by rememberUpdatedState(connected)
     val currentCanSend by rememberUpdatedState(canSend)
+    val currentCanStage by rememberUpdatedState(canStage)
+    val currentHasStaged by rememberUpdatedState(hasStaged)
+    val currentOnStage by rememberUpdatedState(onStage)
+    val currentOnCancelStaged by rememberUpdatedState(onCancelStaged)
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnPickFile by rememberUpdatedState(onPickFile)
     val currentOnPickPhoto by rememberUpdatedState(onPickPhoto)
@@ -1679,12 +1785,15 @@ private fun SendActionButton(
         label = "sendScale",
     )
 
-    val menuItems = remember {
-        listOf(
-            MenuSpec(MenuAction.File, 0, Icons.AutoMirrored.Filled.InsertDriveFile, "File"),
-            MenuSpec(MenuAction.Photo, 1, Icons.Default.Photo, "Photo"),
-            MenuSpec(MenuAction.Settings, 2, Icons.Default.Settings, "Settings"),
-        )
+    val menuItems = remember(hasStaged) {
+        buildList {
+            add(MenuSpec(MenuAction.File, 0, Icons.AutoMirrored.Filled.InsertDriveFile, "File"))
+            add(MenuSpec(MenuAction.Photo, 1, Icons.Default.Photo, "Photo"))
+            add(MenuSpec(MenuAction.Settings, 2, Icons.Default.Settings, "Settings"))
+            if (hasStaged) {
+                add(MenuSpec(MenuAction.CancelStaged, 3, Icons.Default.Close, "取消暂存"))
+            }
+        }
     }
 
     Box(
@@ -1741,6 +1850,7 @@ private fun SendActionButton(
                                         stepPx = stackStepPx,
                                         hitRadiusPx = itemHitRadiusPx,
                                         connected = currentConnected,
+                                        hasStaged = currentHasStaged,
                                     )
                                 }
                                 ComposerDragLock.Send -> {
@@ -1768,12 +1878,17 @@ private fun SendActionButton(
                                 MenuAction.File -> if (currentConnected) currentOnPickFile()
                                 MenuAction.Photo -> if (currentConnected) currentOnPickPhoto()
                                 MenuAction.Settings -> currentOnOpenSettings()
+                                MenuAction.CancelStaged -> if (currentHasStaged) currentOnCancelStaged()
                                 null -> Unit
                             }
                             locked == ComposerDragLock.Send && sendArmed -> currentOnSend()
                             isTap -> {
-                                showHint = true
-                                hintToken++
+                                if (currentConnected && currentCanStage) {
+                                    currentOnStage()
+                                } else {
+                                    showHint = true
+                                    hintToken++
+                                }
                             }
                         }
                         pressed = false
@@ -1789,7 +1904,10 @@ private fun SendActionButton(
     ) {
         if (stackProgress > 0.01f) {
             menuItems.forEach { spec ->
-                val enabled = spec.action == MenuAction.Settings || connected
+                val enabled = when (spec.action) {
+                    MenuAction.Settings, MenuAction.CancelStaged -> true
+                    else -> connected
+                }
                 val itemProgress = ((stackProgress * 1.45f) - spec.index * 0.22f).coerceIn(0f, 1f)
                 StackMenuItem(
                     index = spec.index,
@@ -1836,7 +1954,7 @@ private fun SendActionButton(
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "Actions. Tap to preview menu, swipe left to send, swipe back to cancel, swipe up to choose.",
+                    contentDescription = "Tap to stage an unfinished message, swipe left to send, swipe up for attachments, settings, and canceling staged messages.",
                 )
             }
         }
@@ -1935,12 +2053,18 @@ private fun hitTestStack(
     stepPx: Float,
     hitRadiusPx: Float,
     connected: Boolean,
+    hasStaged: Boolean,
 ): MenuAction? {
     var best: MenuAction? = null
     var bestDist = hitRadiusPx
-    val items = arrayOf(MenuAction.File, MenuAction.Photo, MenuAction.Settings)
+    val items = buildList {
+        add(MenuAction.File)
+        add(MenuAction.Photo)
+        add(MenuAction.Settings)
+        if (hasStaged) add(MenuAction.CancelStaged)
+    }
     for ((index, action) in items.withIndex()) {
-        if (action != MenuAction.Settings && !connected) continue
+        if ((action == MenuAction.File || action == MenuAction.Photo) && !connected) continue
         val center = origin + Offset(0f, -stepPx * (index + 1))
         val dist = (pointer - center).getDistance()
         if (dist < bestDist) {
@@ -1957,6 +2081,8 @@ private fun SelectableMessageRow(
     selectionMode: Boolean,
     onToggle: () -> Unit,
     onLongPress: () -> Unit,
+    selectable: Boolean = true,
+    alpha: Float = 1f,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -1984,10 +2110,17 @@ private fun SelectableMessageRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(highlight)
-            .detectMessageLongPress {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                currentOnLongPress()
-            }
+            .graphicsLayer { this.alpha = alpha }
+            .then(
+                if (selectable) {
+                    Modifier.detectMessageLongPress {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        currentOnLongPress()
+                    }
+                } else {
+                    Modifier
+                }
+            )
             .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -17,6 +17,7 @@ data class AgentStatus(
     val sandboxReady: Boolean = false,
     val queueDepth: Int = 0,
     val activeTurn: Boolean = false,
+    val waitingUser: Boolean = false,
     val pendingApprovals: Int = 0,
     val uptimeS: Long = 0L,
     val memoryTokens: Int = 0,
@@ -41,6 +42,7 @@ data class AgentStatus(
 
 fun AgentStatus.statusLabel(): String = when {
     pendingApprovals > 0 -> "Approval needed"
+    waitingUser -> "Waiting for you"
     activeTurn -> "Replying…"
     queueDepth > 0 -> "Queued · $queueDepth"
     !backendReady -> "Backend not ready"

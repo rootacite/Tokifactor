@@ -48,6 +48,9 @@ The channel exists for as long as clients stay connected. There is nothing to de
   `Info` and every member avatar open a full member profile. Tokifactor users also
   announce a profile, so humans and agents share the same roster. Without remote
   members, the app stays a normal tokifactor chat client.
+- A member currently in `wait_user` is outlined in blue in the member bar. While any
+  member is waiting, a new user message without `@` is routed only to the waiting
+  members; already-working members may still receive it in their active turn.
 - **Solo time:** open an agent profile and choose **Solo time** to switch to that
   member's derived private channel. The group connection stays alive, so group
   messages and notifications continue to arrive; aki-layer remains owned by Aki.
@@ -57,9 +60,16 @@ The channel exists for as long as clients stay connected. There is nothing to de
   same retained-control handshake.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
-- Agent replies with multiple blank-line-separated paragraphs render as separate
-  bubbles; Markdown lists, fenced/indented code blocks, and block quotes stay intact,
-  and selection/delete still target the original message.
+- Messages from agents and human users with multiple blank-line-separated paragraphs
+  render as separate bubbles; Markdown lists, fenced/indented code blocks, and block
+  quotes stay intact, and selection/delete still target the original message.
+- **“还没说完” segmented compose:** stage text and emoji fragments locally and see them
+  in the chat list as translucent pending bubbles. The client joins the fragments with
+  `\n\n` into one protocol message, so agents receive one message but the UI renders
+  separate bubbles. Selecting an emoji enters this state and requires confirmation.
+  Single-tap the circular `+` to stage the current text; swipe left on it to confirm/send
+  (an empty input is allowed when staged messages exist); swipe up for attachments,
+  settings, and canceling staged messages.
 - Consecutive tool cards and approvals from the same turn collapse into one expandable
   group; pending approvals auto-expand so they stay actionable.
 - **Photos** and **arbitrary files**, sent in chunks with size + percent progress, cancel on the sender, and a system chip on the receiver if the peer cancels, fails, or times out.

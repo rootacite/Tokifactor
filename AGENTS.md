@@ -176,12 +176,13 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
 - `MainPage` groups consecutive `agentKind == "tool"` and `"approval"` messages from
   the same turn into one collapsed card; pending approvals force it open, and
   selection/deletion operate on every message in the group.
-- Agent `turn` text is split into multiple display bubbles at blank-line paragraph
-  boundaries. This is presentation-only: every part keeps the original message id,
-  so streaming upserts, selection, deletion, and persistence still operate on one
-  message. Blank lines inside Markdown lists, fenced/indented code blocks, and block
-  quotes do not split the bubble, and a fence immediately following a list item stays
-  attached to that list.
+- Text messages from agents and human users are split into multiple display bubbles at
+  blank-line paragraph boundaries. This is presentation-only: every part keeps the
+  original message id, so streaming upserts, selection, deletion, and persistence still
+  operate on one message. Blank lines inside Markdown lists, fenced/indented code blocks,
+  and block quotes do not split the bubble, and a fence immediately following a list
+  item stays attached to that list. `PartialComposer.assemblePartialMessage` joins
+  locally staged fragments with exactly one blank line.
 - Text envelopes may carry `akid.v1` metadata (`kind`, `turnId`, `phase`, approval and
   tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
   `status`, and `offline` messages for Aki discovery and must never enter chat
@@ -194,12 +195,20 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   display items, and the emoji itself renders as a bubble-less transparent message.
   Unknown names, missing resources, fenced code, and inline code stay literal.
   The composer has an emoji picker grouped by member that exposes every bundled
-  sticker to the human user; selecting one sends a standalone `#[name:desc]`
-  message through the normal text path.
+  sticker to the human user. Selecting one stages a standalone `#[name:desc]`
+  fragment and enters the “还没说完” partial state. Staged fragments render in the
+  chat list as translucent local user bubbles; nothing is sent until the user confirms,
+  and the final payload stays one normal text message separated by `\n\n`.
+  The circular `+` button: single tap stages the current input, left swipe confirms/sends
+  (empty input is valid when staged fragments exist), and upward swipe opens
+  file/photo/settings plus “取消暂存” when there is staged content.
 - `AgentStatus` is used for both Aki agents and Tokifactor human peers. Its stable
   fields are `memberId` and `memberName`; `agentId`/`agentName` remain read-only
   aliases for old UI and wire paths. `memberKind` is `user` or `agent`; missing values
   normalize to `agent`. `ChatEngine.memberStates` is keyed by immutable `memberId`.
+  `waitingUser` is mirrored from control status/presence and from `akid.v1`
+  `kind=wait_user` text events; the latter update the member state immediately without
+  entering chat history. Member chips draw a blue outline while it is true.
   The first transport source that announces an id owns its profile; later sources only
   add liveness. Per-source heartbeats prevent one device going offline from removing a
   member still announced by another device. Members time out after 30 seconds without

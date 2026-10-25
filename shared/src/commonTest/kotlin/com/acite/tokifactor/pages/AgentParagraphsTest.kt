@@ -8,7 +8,7 @@ class AgentParagraphsTest {
     fun splitsAtBlankLines() {
         assertEquals(
             listOf("First paragraph.", "Second paragraph."),
-            splitAgentParagraphs("First paragraph.\n\nSecond paragraph."),
+            splitMessageParagraphs("First paragraph.\n\nSecond paragraph."),
         )
     }
 
@@ -16,7 +16,7 @@ class AgentParagraphsTest {
     fun collapsesConsecutiveBlankLines() {
         assertEquals(
             listOf("One", "Two", "Three"),
-            splitAgentParagraphs("One\n\n\nTwo\n  \nThree"),
+            splitMessageParagraphs("One\n\n\nTwo\n  \nThree"),
         )
     }
 
@@ -24,7 +24,7 @@ class AgentParagraphsTest {
     fun normalizesCrLfOnlyWhenSplitting() {
         assertEquals(
             listOf("One", "Two"),
-            splitAgentParagraphs("One\r\n\r\nTwo"),
+            splitMessageParagraphs("One\r\n\r\nTwo"),
         )
     }
 
@@ -38,7 +38,7 @@ class AgentParagraphsTest {
                 "```kotlin\nval one = 1\n\nval two = 2\n```",
                 "After",
             ),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -70,7 +70,7 @@ class AgentParagraphsTest {
                     "```",
                 "Done.",
             ),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -92,7 +92,7 @@ class AgentParagraphsTest {
                     "3. third",
                 "Outro",
             ),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -118,7 +118,7 @@ class AgentParagraphsTest {
                     "- second",
                 "Outro",
             ),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -128,7 +128,7 @@ class AgentParagraphsTest {
 
         assertEquals(
             listOf("Before", "    first\n\n    second", "After"),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -138,7 +138,7 @@ class AgentParagraphsTest {
 
         assertEquals(
             listOf("Before", "> first\n\n> second", "After"),
-            splitAgentParagraphs(content),
+            splitMessageParagraphs(content),
         )
     }
 
@@ -148,8 +148,8 @@ class AgentParagraphsTest {
         val code = "```\nfirst\n\nsecond\n```"
         val longerFence = "````\n```\n\nstill code\n````"
 
-        assertEquals(listOf(single), splitAgentParagraphs(single))
-        assertEquals(listOf(code), splitAgentParagraphs(code))
-        assertEquals(listOf(longerFence), splitAgentParagraphs(longerFence))
+        assertEquals(listOf(single), splitMessageParagraphs(single))
+        assertEquals(listOf(code), splitMessageParagraphs(code))
+        assertEquals(listOf(longerFence), splitMessageParagraphs(longerFence))
     }
 }

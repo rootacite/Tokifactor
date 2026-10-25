@@ -1081,6 +1081,7 @@ class ChatEngine @Inject constructor(
             sandboxReady = parseBoolean(meta["sandboxReady"]) ?: old.sandboxReady,
             queueDepth = meta["queueDepth"]?.toIntOrNull() ?: old.queueDepth,
             activeTurn = parseBoolean(meta["activeTurn"]) ?: old.activeTurn,
+            waitingUser = parseBoolean(meta["waitingUser"]) ?: old.waitingUser,
             pendingApprovals = meta["pendingApprovals"]?.toIntOrNull()
                 ?: old.pendingApprovals,
             uptimeS = meta["uptimeS"]?.toLongOrNull() ?: old.uptimeS,
@@ -1276,7 +1277,28 @@ class ChatEngine @Inject constructor(
             "approval" -> applyAgentApproval(normalized, turnId, seq, eventAt)
             "approval_resolved" -> applyAgentApprovalResolved(normalized, turnId, seq, eventAt)
             "error" -> applyAgentError(normalized, turnId, seq, eventAt)
+            "wait_user" -> applyAgentWaitUser(normalized, meta, eventAt)
         }
+    }
+
+    private fun applyAgentWaitUser(
+        envelope: TextEnvelope,
+        metadata: Map<String, String>,
+        eventAt: Long,
+    ) {
+        val memberId = envelope.senderId
+        if (memberId.isBlank() || memberId == settingsStore.memberId) return
+        val waiting = parseBoolean(metadata["waitingUser"]) ?: return
+        val old = memberStates[memberId]
+        memberStates[memberId] = (old ?: AgentStatus(
+            memberId = memberId,
+            memberName = envelope.sender,
+        )).copy(
+            present = true,
+            lastSeenAt = maxOf(old?.lastSeenAt ?: 0L, eventAt),
+            waitingUser = waiting,
+        )
+        emitMembersChanged()
     }
 
     private fun attachmentPlaceholders(

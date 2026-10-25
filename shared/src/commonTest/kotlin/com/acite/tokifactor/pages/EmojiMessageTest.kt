@@ -98,6 +98,84 @@ class EmojiMessageTest {
     }
 
     @Test
+    fun userParagraphsRenderAsMultipleBubbles() {
+        val message = ChatMessage(
+            id = "user-paragraphs",
+            content = "第一段\n\n第二段\n\n第三段",
+            pic = null,
+            isMine = true,
+            sender = "Master",
+        )
+        val items = buildChatDisplayItems(listOf(message), catalog)
+        assertEquals(3, items.size)
+        val parts = items.map { assertIs<ChatDisplayItem.TextPart>(it) }
+        assertEquals(listOf("第一段", "第二段", "第三段"), parts.map { it.message.content })
+        assertEquals(listOf(false, false, true), parts.map { it.isLast })
+        assertTrue(parts.all { it.message.id == message.id })
+    }
+
+    @Test
+    fun userEmojiAndParagraphsKeepOrderAndLastFlag() {
+        val message = ChatMessage(
+            id = "user-emoji-paragraphs",
+            content = "第一段\n\n你看 #[aki_cheer:开心] 笑死\n\n第三段",
+            pic = null,
+            isMine = true,
+            sender = "Master",
+        )
+        val items = buildChatDisplayItems(listOf(message), catalog)
+        val kinds = items.map {
+            when (it) {
+                is ChatDisplayItem.TextPart -> "text:${it.message.content}"
+                is ChatDisplayItem.EmojiPart -> "emoji:${it.asset.name}"
+                else -> "other"
+            }
+        }
+        assertEquals(
+            listOf(
+                "text:第一段",
+                "text:你看",
+                "emoji:aki_cheer",
+                "text:笑死",
+                "text:第三段",
+            ),
+            kinds,
+        )
+        val messages = items.mapNotNull {
+            (it as? ChatDisplayItem.MessageItem)?.message
+        }
+        assertTrue(messages.all { it.id == message.id })
+        val lastFlags = items.map {
+            when (it) {
+                is ChatDisplayItem.TextPart -> it.isLast
+                is ChatDisplayItem.EmojiPart -> it.isLast
+                else -> false
+            }
+        }
+        assertEquals(listOf(false, false, false, false, true), lastFlags)
+    }
+
+    @Test
+    fun stagedMessagesKeepIdsAndAreMarkedForTranslucentRendering() {
+        val message = ChatMessage(
+            id = "draft:group:0",
+            content = "第一段\n\n第二段",
+            pic = null,
+            isMine = true,
+            sender = "Master",
+        )
+        val items = buildChatDisplayItems(
+            messages = listOf(message),
+            emojiCatalog = catalog,
+            stagedIds = setOf(message.id),
+        )
+        assertEquals(2, items.size)
+        val parts = items.map { assertIs<ChatDisplayItem.TextPart>(it) }
+        assertTrue(parts.all { it.staged })
+        assertTrue(parts.all { it.message.id == message.id })
+    }
+
+    @Test
     fun outgoingTokenUsesCatalogDescriptionAndStaysParseable() {
         val token = emojiToken(asset)
         assertEquals("#[aki_cheer:开心时使用]", token)

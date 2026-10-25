@@ -1,14 +1,14 @@
 package com.acite.tokifactor.pages
 
 /**
- * Split an agent reply into display paragraphs at blank lines.
+ * Split a message into display paragraphs at blank lines.
  *
  * Blank lines only separate top-level blocks. Markdown lists, fenced and
  * indented code blocks, and block quotes keep their internal blank lines.
  * The returned strings preserve the original Markdown and line endings except
  * for the blank-line separators between paragraphs.
  */
-internal fun splitAgentParagraphs(content: String): List<String> {
+internal fun splitMessageParagraphs(content: String): List<String> {
     if (content.isBlank()) return listOf(content)
     val normalized = content.replace("\r\n", "\n").replace('\r', '\n')
     val lines = normalized.split('\n')
