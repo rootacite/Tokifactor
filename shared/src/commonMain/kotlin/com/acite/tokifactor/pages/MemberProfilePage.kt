@@ -55,6 +55,9 @@ fun MemberProfilePage(
     recentMessages: List<ChatMessage>,
     onBack: () -> Unit,
     onEditProfile: (() -> Unit)? = null,
+    soloActive: Boolean = false,
+    soloTargetId: String = "",
+    onSolo: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
     val now = remember(member.memberId) { System.currentTimeMillis() }
@@ -176,6 +179,26 @@ fun MemberProfilePage(
                             value = member.pendingApprovals.toString(),
                         )
                     }
+                }
+            }
+
+            if (!member.isUser && onSolo != null) {
+                TokiCapsuleButton(
+                    text = if (soloActive && soloTargetId == member.memberId) {
+                        "End solo time"
+                    } else {
+                        "Solo time"
+                    },
+                    onClick = onSolo,
+                    emphasized = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (soloActive && soloTargetId != member.memberId) {
+                    Text(
+                        text = "Another solo session is active. End it from the main screen first.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.textDim,
+                    )
                 }
             }
 

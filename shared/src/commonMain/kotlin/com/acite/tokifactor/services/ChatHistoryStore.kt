@@ -143,6 +143,7 @@ object ChatHistoryStore {
             "senderId" to message.senderId,
             "fileSize" to message.fileSize.toString(),
             "sentAt" to message.sentAt.toString(),
+            "conversationId" to message.conversationId,
         )
         message.fileName?.let { pairs += "fileName" to it }
         if (message.isAgent) {
@@ -188,6 +189,7 @@ object ChatHistoryStore {
         val fileName = WireJson.extractString(json, "fileName")
         val fileSize = WireJson.extractString(json, "fileSize")?.toLongOrNull() ?: 0L
         val sentAt = WireJson.extractString(json, "sentAt")?.toLongOrNull() ?: 0L
+        val conversationId = WireJson.extractString(json, "conversationId") ?: "group"
         val agentKind = WireJson.extractString(json, "agentKind") ?: ""
         val turnId = WireJson.extractString(json, "turnId") ?: ""
         val segment = WireJson.extractString(json, "segment")?.toIntOrNull() ?: 0
@@ -246,6 +248,7 @@ object ChatHistoryStore {
                 details = details,
                 status = status,
                 sentAt = sentAt,
+                conversationId = conversationId,
                 attachments = attachments,
             )
             "file" -> ChatMessage(
@@ -261,6 +264,7 @@ object ChatHistoryStore {
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
                 sentAt = sentAt,
+                conversationId = conversationId,
                 attachments = attachments,
             )
             "image" -> ChatMessage(
@@ -275,6 +279,7 @@ object ChatHistoryStore {
                 filePath = blobPath,
                 fileSize = fileSize.takeIf { it > 0L } ?: (blob?.length() ?: 0L),
                 sentAt = sentAt,
+                conversationId = conversationId,
                 attachments = attachments,
             )
             else -> ChatMessage(
@@ -287,6 +292,7 @@ object ChatHistoryStore {
                 isMine = isMine,
                 isSystem = isSystem,
                 sentAt = sentAt,
+                conversationId = conversationId,
                 attachments = attachments,
             )
         }

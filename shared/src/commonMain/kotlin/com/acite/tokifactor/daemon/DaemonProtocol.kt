@@ -29,6 +29,9 @@ object DaemonProtocol {
     const val COMMAND_RELOAD_SETTINGS = "reload_settings"
     const val COMMAND_ADD_SYSTEM_MESSAGE = "add_system_message"
     const val COMMAND_PING = "ping"
+    const val COMMAND_START_SOLO = "start_solo"
+    const val COMMAND_END_SOLO = "end_solo"
+    const val COMMAND_SELECT_CONVERSATION = "select_conversation"
 
     const val EVENT_MESSAGE_UPSERT = "message_upsert"
     const val EVENT_MESSAGES_REMOVED = "messages_removed"
@@ -36,6 +39,7 @@ object DaemonProtocol {
     const val EVENT_CONNECTION = "connection"
     const val EVENT_MEMBERS = "members"
     const val EVENT_PEER_AVATAR = "peer_avatar"
+    const val EVENT_STATE = "state"
 }
 
 @Serializable
@@ -54,6 +58,9 @@ data class DaemonClientFrame(
     val isError: Boolean = false,
     val attachmentPaths: List<String> = emptyList(),
     val attachmentNames: List<String> = emptyList(),
+    val soloTargetId: String = "",
+    val soloTargetName: String = "",
+    val conversationId: String = "",
 )
 
 @Serializable
@@ -75,6 +82,14 @@ data class DaemonSnapshot(
     val status: String = "Connecting…",
     val members: List<WireAgentStatus> = emptyList(),
     val peerAvatars: Map<String, String> = emptyMap(),
+    val currentConversationId: String = "group",
+    val soloActive: Boolean = false,
+    val soloPhase: String = "idle",
+    val soloSessionId: String = "",
+    val soloTargetId: String = "",
+    val soloTargetName: String = "",
+    val soloStartedAt: String = "",
+    val soloError: String = "",
 )
 
 @Serializable
@@ -87,6 +102,14 @@ data class DaemonEvent(
     val members: List<WireAgentStatus> = emptyList(),
     val peerId: String = "",
     val peerAvatar: String = "",
+    val currentConversationId: String = "",
+    val soloActive: Boolean = false,
+    val soloPhase: String = "",
+    val soloSessionId: String = "",
+    val soloTargetId: String = "",
+    val soloTargetName: String = "",
+    val soloStartedAt: String = "",
+    val soloError: String = "",
 )
 
 @Serializable
@@ -121,6 +144,7 @@ data class WireChatMessage(
     val status: String = "",
     val sentAt: Long = 0L,
     val attachments: List<WireChatAttachment> = emptyList(),
+    val conversationId: String = "group",
 )
 
 @Serializable
@@ -172,6 +196,14 @@ fun ChatSession.snapshot(): DaemonSnapshot = DaemonSnapshot(
     status = connectionStatus.value,
     members = members.map { it.toWire() },
     peerAvatars = peerAvatars.mapValues { (_, bytes) -> encodeBytes(bytes) },
+    currentConversationId = currentConversationId,
+    soloActive = soloState.active,
+    soloPhase = soloState.phase,
+    soloSessionId = soloState.sessionId,
+    soloTargetId = soloState.targetId,
+    soloTargetName = soloState.targetName,
+    soloStartedAt = soloState.startedAt,
+    soloError = soloState.error,
 )
 
 fun ChatEngineEvent.toDaemonEvent(): DaemonEvent? = when (this) {
@@ -199,6 +231,17 @@ fun ChatEngineEvent.toDaemonEvent(): DaemonEvent? = when (this) {
         kind = DaemonProtocol.EVENT_PEER_AVATAR,
         peerId = peerId,
         peerAvatar = bytes?.let(::encodeBytes).orEmpty(),
+    )
+    is ChatEngineEvent.StateChanged -> DaemonEvent(
+        kind = DaemonProtocol.EVENT_STATE,
+        currentConversationId = currentConversationId,
+        soloActive = soloState.active,
+        soloPhase = soloState.phase,
+        soloSessionId = soloState.sessionId,
+        soloTargetId = soloState.targetId,
+        soloTargetName = soloState.targetName,
+        soloStartedAt = soloState.startedAt,
+        soloError = soloState.error,
     )
 }
 
@@ -233,6 +276,7 @@ fun ChatMessage.toWire(): WireChatMessage = WireChatMessage(
     status = status,
     sentAt = sentAt,
     attachments = attachments.map { it.toWire() },
+    conversationId = conversationId,
 )
 
 fun WireChatMessage.toChatMessage(): ChatMessage = ChatMessage(
@@ -266,6 +310,7 @@ fun WireChatMessage.toChatMessage(): ChatMessage = ChatMessage(
     status = status,
     sentAt = sentAt,
     attachments = attachments.map { it.toChatAttachment() },
+    conversationId = conversationId,
 )
 
 private fun ChatAttachment.toWire(): WireChatAttachment = WireChatAttachment(

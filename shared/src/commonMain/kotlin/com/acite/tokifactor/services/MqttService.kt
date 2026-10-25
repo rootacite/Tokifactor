@@ -127,12 +127,14 @@ class MqttService @Inject constructor(
         topic: String,
         payload: String,
         qos: MqttDeliveryQos = MqttDeliveryQos.AtLeastOnce,
+        retain: Boolean = false,
     ) {
         val asyncClient = client ?: throw IllegalStateException("MQTT Not Connected")
 
         asyncClient.publishWith()
             .topic(topic)
             .qos(com.hivemq.client.mqtt.datatypes.MqttQos.fromCode(qos.code)!!)
+            .retain(retain)
             .payload(payload.toByteArray(StandardCharsets.UTF_8))
             .send()
             .await()

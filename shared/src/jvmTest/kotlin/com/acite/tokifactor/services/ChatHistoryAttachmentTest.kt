@@ -27,6 +27,7 @@ class ChatHistoryAttachmentTest {
                         sender = "Alice",
                         senderId = "alice",
                         sentAt = 123L,
+                        conversationId = "solo:legacy_aki",
                         attachments = listOf(
                             ChatAttachment(
                                 id = "attachment-1",
@@ -42,6 +43,7 @@ class ChatHistoryAttachmentTest {
 
             val loaded = ChatHistoryStore.load().single()
             assertEquals("look at 图片1", loaded.content)
+            assertEquals("solo:legacy_aki", loaded.conversationId)
             assertEquals("图片1", loaded.attachments.single().name)
             val path = loaded.attachments.single().filePath
             assertTrue(path != null && java.io.File(path).isFile)

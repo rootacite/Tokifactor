@@ -2,6 +2,8 @@ package com.acite.tokifactor.pages
 
 import androidx.lifecycle.ViewModel
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ConversationSummary
+import com.acite.tokifactor.model.SoloState
 import com.acite.tokifactor.services.ChatSession
 import com.acite.tokifactor.services.OutgoingAttachment
 import dev.zacsweers.metro.AppScope
@@ -18,7 +20,19 @@ class MainPageViewModel(
 ) : ViewModel() {
 
     val messages: List<ChatMessage>
+        get() = chatEngine.visibleMessages
+
+    val allMessages: List<ChatMessage>
         get() = chatEngine.messages
+
+    val currentConversationId: String
+        get() = chatEngine.currentConversationId
+
+    val conversations: List<ConversationSummary>
+        get() = chatEngine.conversations
+
+    val soloState: SoloState
+        get() = chatEngine.soloState
 
     val avatarBytes get() = chatEngine.avatarBytes
 
@@ -47,6 +61,14 @@ class MainPageViewModel(
     fun refreshSettings() = chatEngine.refreshSettings()
 
     fun selectAgent(agentId: String) = chatEngine.selectAgent(agentId)
+
+    fun selectConversation(conversationId: String) =
+        chatEngine.selectConversation(conversationId)
+
+    fun startSolo(memberId: String, memberName: String) =
+        chatEngine.startSolo(memberId, memberName)
+
+    fun endSolo() = chatEngine.endSolo()
 
     fun addMessage(content: String, isError: Boolean = false) =
         chatEngine.addMessage(content, isError)

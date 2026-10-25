@@ -9,6 +9,9 @@ import com.acite.tokifactor.copyFileToPlatformFile
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ConversationSummary
+import com.acite.tokifactor.model.GROUP_CONVERSATION
+import com.acite.tokifactor.model.SoloState
 import com.acite.tokifactor.model.InboundNotice
 import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.model.isMemberId
@@ -70,6 +73,43 @@ class DaemonChatSession @Inject constructor(
     override val messages: List<ChatMessage>
         field = mutableStateListOf()
 
+    override val visibleMessages: List<ChatMessage>
+        get() = messages.filter { it.conversationId == currentConversationId }
+
+    override var currentConversationId by mutableStateOf("group")
+        private set
+
+    override var soloState by mutableStateOf(SoloState())
+        private set
+
+    override val conversations: List<ConversationSummary>
+        get() {
+            val out = linkedMapOf<String, ConversationSummary>()
+            out[GROUP_CONVERSATION] = ConversationSummary(GROUP_CONVERSATION, "Group chat")
+            for (message in messages) {
+                val id = message.conversationId
+                if (!id.startsWith("solo:")) continue
+                val memberId = id.removePrefix("solo:")
+                val previous = out[id]
+                out[id] = ConversationSummary(
+                    id = id,
+                    title = if (soloState.active && memberId == soloState.targetId) {
+                        "Solo · ${soloState.targetName}"
+                    } else {
+                        "Solo · ${identityRegistryName(memberId)}"
+                    },
+                    memberId = memberId,
+                    lastMessageAt = maxOf(previous?.lastMessageAt ?: 0L, message.sentAt),
+                )
+            }
+            return out.values.sortedWith(
+                compareBy<ConversationSummary> { it.id != GROUP_CONVERSATION }
+                    .thenByDescending { it.lastMessageAt }
+            )
+        }
+
+    private fun identityRegistryName(memberId: String): String = memberId
+
     override var avatarBytes by mutableStateOf(settingsStore.avatarBytes)
         private set
 
@@ -84,6 +124,10 @@ class DaemonChatSession @Inject constructor(
     override val members: List<AgentStatus>
         get() = memberStates.values
             .filter { it.present }
+            .filter {
+                !currentConversationId.startsWith("solo:") ||
+                    it.memberId == currentConversationId.removePrefix("solo:")
+            }
             .sortedWith(compareBy<AgentStatus>(
                 { it.memberName.lowercase() != "aki" && !it.aliasList().any { alias -> alias.lowercase() == "aki" } },
                 { it.memberName.lowercase() },
@@ -91,7 +135,7 @@ class DaemonChatSession @Inject constructor(
             ))
 
     override val agentStatus: AgentStatus
-        get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
+        get() = selectedMember(members, selectedAgentId) ?: AgentStatus()
 
     override val deviceId: String
         get() = settingsStore.deviceId
@@ -281,6 +325,16 @@ class DaemonChatSession @Inject constructor(
             messages.addAll(messagesSnapshot)
             connected = snapshot.connected
             _connectionStatus.value = snapshot.status
+            currentConversationId = snapshot.currentConversationId
+            soloState = SoloState(
+                active = snapshot.soloActive,
+                phase = snapshot.soloPhase,
+                sessionId = snapshot.soloSessionId,
+                targetId = snapshot.soloTargetId,
+                targetName = snapshot.soloTargetName,
+                startedAt = snapshot.soloStartedAt,
+                error = snapshot.soloError,
+            )
             memberStates.clear()
             membersSnapshot.forEach { memberStates[it.memberId] = it }
             peerAvatars.clear()
@@ -321,6 +375,20 @@ class DaemonChatSession @Inject constructor(
                     val bytes = decodeAvatar(event.peerAvatar)
                     val memberId = normalizeMemberId(event.peerId, event.peerId)
                     if (bytes == null) peerAvatars.remove(memberId) else peerAvatars[memberId] = bytes
+                }
+                DaemonProtocol.EVENT_STATE -> {
+                    if (event.currentConversationId.isNotBlank()) {
+                        currentConversationId = event.currentConversationId
+                    }
+                    soloState = SoloState(
+                        active = event.soloActive,
+                        phase = event.soloPhase,
+                        sessionId = event.soloSessionId,
+                        targetId = event.soloTargetId,
+                        targetName = event.soloTargetName,
+                        startedAt = event.soloStartedAt,
+                        error = event.soloError,
+                    )
                 }
             }
         }
@@ -392,6 +460,37 @@ class DaemonChatSession @Inject constructor(
 
     override fun selectAgent(agentId: String) {
         if (agentId.isNotBlank()) selectedAgentId = agentId
+    }
+
+    override fun selectConversation(conversationId: String) {
+        if (conversationId.isBlank()) return
+        currentConversationId = conversationId
+        commandScope.launch {
+            request(
+                DaemonClientFrame(
+                    command = DaemonProtocol.COMMAND_SELECT_CONVERSATION,
+                    conversationId = conversationId,
+                )
+            )
+        }
+    }
+
+    override fun startSolo(memberId: String, memberName: String) {
+        commandScope.launch {
+            request(
+                DaemonClientFrame(
+                    command = DaemonProtocol.COMMAND_START_SOLO,
+                    soloTargetId = memberId,
+                    soloTargetName = memberName,
+                )
+            )
+        }
+    }
+
+    override fun endSolo() {
+        commandScope.launch {
+            request(DaemonClientFrame(command = DaemonProtocol.COMMAND_END_SOLO))
+        }
     }
 
     override fun findMember(name: String): AgentStatus? =

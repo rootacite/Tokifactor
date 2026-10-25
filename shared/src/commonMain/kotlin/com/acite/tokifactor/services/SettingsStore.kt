@@ -46,6 +46,12 @@ class SettingsStore @Inject constructor() {
         private const val KEY_DEVICE_ID = "deviceId"
         private const val KEY_MEMBER_ID = "memberId"
         private const val KEY_IDENTITY_BOUND = "identityBound"
+        private const val KEY_SOLO_ACTIVE = "soloActive"
+        private const val KEY_SOLO_SESSION_ID = "soloSessionId"
+        private const val KEY_SOLO_TARGET_ID = "soloTargetId"
+        private const val KEY_SOLO_TARGET_NAME = "soloTargetName"
+        private const val KEY_SOLO_STARTED_AT = "soloStartedAt"
+        private const val KEY_CONVERSATION_ID = "conversationId"
     }
 
     var magicString: String = DEFAULT_MAGIC_STRING
@@ -88,6 +94,24 @@ class SettingsStore @Inject constructor() {
         private set
 
     var identityBound: Boolean = false
+        private set
+
+    var soloActive: Boolean = false
+        private set
+
+    var soloSessionId: String = ""
+        private set
+
+    var soloTargetId: String = ""
+        private set
+
+    var soloTargetName: String = ""
+        private set
+
+    var soloStartedAt: String = ""
+        private set
+
+    var conversationId: String = "group"
         private set
 
     val mqttBroker: MqttBroker
@@ -161,6 +185,16 @@ class SettingsStore @Inject constructor() {
         identityBound = parsed[KEY_IDENTITY_BOUND]
             ?.toBooleanStrictOrNull()
             ?: existingInstall
+        soloActive = parsed[KEY_SOLO_ACTIVE]?.toBooleanStrictOrNull() ?: false
+        soloSessionId = parsed[KEY_SOLO_SESSION_ID].orEmpty()
+        soloTargetId = parsed[KEY_SOLO_TARGET_ID].orEmpty()
+        soloTargetName = parsed[KEY_SOLO_TARGET_NAME].orEmpty()
+        soloStartedAt = parsed[KEY_SOLO_STARTED_AT].orEmpty()
+        conversationId = parsed[KEY_CONVERSATION_ID]?.ifBlank { null } ?: "group"
+        if (soloActive && soloTargetId.isBlank()) {
+            soloActive = false
+            conversationId = "group"
+        }
         avatarBytes = loadAvatar()
         mqttProbes = loadMqttProbes()
         if (!file.exists() ||
@@ -268,6 +302,40 @@ class SettingsStore @Inject constructor() {
         }
     }
 
+    @Synchronized
+    fun updateSoloState(
+        sessionId: String,
+        targetId: String,
+        targetName: String,
+        startedAt: String,
+        conversationId: String,
+    ) {
+        soloActive = true
+        soloSessionId = sessionId
+        soloTargetId = targetId
+        soloTargetName = targetName
+        soloStartedAt = startedAt
+        this.conversationId = conversationId
+        persist()
+    }
+
+    @Synchronized
+    fun clearSoloState(conversationId: String = "group") {
+        soloActive = false
+        soloSessionId = ""
+        soloTargetId = ""
+        soloTargetName = ""
+        soloStartedAt = ""
+        this.conversationId = conversationId
+        persist()
+    }
+
+    @Synchronized
+    fun updateConversationId(value: String) {
+        conversationId = value.ifBlank { "group" }
+        persist()
+    }
+
     private fun loadAvatar(): ByteArray? {
         val file = appAvatarFile()
         if (!file.exists() || file.length() <= 0L) return null
@@ -333,7 +401,13 @@ class SettingsStore @Inject constructor() {
                 "$KEY_CUSTOM_PASSWORD = \"${escapeTomlString(mqttCustomPassword)}\"\n" +
                 "$KEY_DEVICE_ID = \"${escapeTomlString(deviceId)}\"\n" +
                 "$KEY_MEMBER_ID = \"${escapeTomlString(memberId)}\"\n" +
-                "$KEY_IDENTITY_BOUND = \"$identityBound\"\n"
+                "$KEY_IDENTITY_BOUND = \"$identityBound\"\n" +
+                "$KEY_SOLO_ACTIVE = \"$soloActive\"\n" +
+                "$KEY_SOLO_SESSION_ID = \"${escapeTomlString(soloSessionId)}\"\n" +
+                "$KEY_SOLO_TARGET_ID = \"${escapeTomlString(soloTargetId)}\"\n" +
+                "$KEY_SOLO_TARGET_NAME = \"${escapeTomlString(soloTargetName)}\"\n" +
+                "$KEY_SOLO_STARTED_AT = \"${escapeTomlString(soloStartedAt)}\"\n" +
+                "$KEY_CONVERSATION_ID = \"${escapeTomlString(conversationId)}\"\n"
         val tmp = File(requireNotNull(file.parentFile), "${file.name}.tmp")
         tmp.writeText(body)
         if (!tmp.renameTo(file)) {

@@ -139,6 +139,14 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
 
 ### MQTT
 
+**Solo mode.** A member's profile exposes a Solo action. The client derives a
+per-member magic with HMAC-SHA256(group magic, `"aki-solo-v1\0" + memberId`) and
+uses a retained `solo_start` / `solo_ready` / `solo_end` handshake. The MQTT
+connection, subscription, and stable client id never change; the client keeps a
+keyring so group messages still arrive while solo, and routes decrypted messages
+to `group` or `solo:<memberId>` conversations. Never unsubscribe or create a new
+persistent session when entering solo.
+
 `MqttService` (`services/MqttService.kt`):
 
 - Broker default: `broker.hivemq.com:8883` with SSL.

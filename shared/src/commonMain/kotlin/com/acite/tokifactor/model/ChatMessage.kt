@@ -4,6 +4,7 @@ data class ChatMessage(
     val id: String,
     val content: String,
     val pic: ByteArray?,
+    val conversationId: String = GROUP_CONVERSATION,
     val isError: Boolean = false,
     val chunksReceived: Int = 0,
     val chunksTotal: Int = 0,
@@ -88,6 +89,7 @@ data class ChatMessage(
         if (chunksReceived != other.chunksReceived) return false
         if (chunksTotal != other.chunksTotal) return false
         if (id != other.id) return false
+        if (conversationId != other.conversationId) return false
         if (content != other.content) return false
         if (sender != other.sender) return false
         if (senderId != other.senderId) return false
@@ -123,6 +125,7 @@ data class ChatMessage(
         result = 31 * result + chunksReceived
         result = 31 * result + chunksTotal
         result = 31 * result + id.hashCode()
+        result = 31 * result + conversationId.hashCode()
         result = 31 * result + content.hashCode()
         result = 31 * result + sender.hashCode()
         result = 31 * result + senderId.hashCode()

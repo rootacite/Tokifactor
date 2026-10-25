@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
@@ -91,6 +92,7 @@ import com.acite.tokifactor.model.MEMBER_KIND_USER
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
 import com.acite.tokifactor.model.memberNameKey
+import com.acite.tokifactor.model.SoloState
 import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.queueBadgeLabel
 import com.acite.tokifactor.model.recentMemberMessages
@@ -471,7 +473,20 @@ fun MainPage(
     var confirmDelete by remember { mutableStateOf(false) }
     var lastCount by remember { mutableIntStateOf(-1) }
     var profileTarget by remember { mutableStateOf<MemberProfileTarget?>(null) }
+    var showConversations by remember { mutableStateOf(false) }
+    var confirmEndSolo by remember { mutableStateOf(false) }
     val members = viewModel.members
+    val solo = viewModel.soloState
+    val canWrite = if (solo.active) {
+        viewModel.currentConversationId == "solo:${solo.targetId}"
+    } else {
+        viewModel.currentConversationId == "group"
+    }
+    val historicalSoloId = viewModel.currentConversationId
+        .takeIf { it.startsWith("solo:") && !solo.active }
+    val historicalSolo = historicalSoloId?.let { id ->
+        viewModel.conversations.firstOrNull { it.id == id }
+    }
     val agentStatus = viewModel.agentStatus
 
     val imagePickerLauncher = rememberFilePickerLauncher(
@@ -614,6 +629,8 @@ fun MainPage(
     val listTopPad by animateDpAsState(
         targetValue = when {
             selectionMode -> 68.dp
+            solo.active -> 186.dp
+            historicalSolo != null -> 186.dp
             members.isNotEmpty() -> 130.dp
             else -> 16.dp
         },
@@ -812,7 +829,64 @@ fun MainPage(
                 onShowInfo = { member ->
                     profileTarget = MemberProfileTarget(member = member, isSelf = false)
                 },
+                onOpenConversations = { showConversations = true },
             )
+        }
+
+        AnimatedVisibility(
+            visible = solo.active && !selectionMode,
+            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
+            exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            SoloBanner(
+                solo = solo,
+                viewingActive = canWrite,
+                onReturn = {
+                    viewModel.selectConversation("solo:${solo.targetId}")
+                },
+                onEnd = { confirmEndSolo = true },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = historicalSolo != null && !selectionMode,
+            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
+            exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter),
+        ) {
+            val summary = historicalSolo
+            if (summary != null) {
+                TokiSurface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(top = 132.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    color = colors.bgPanel.copy(alpha = 0.92f),
+                    borderColor = colors.accentPink.copy(alpha = 0.34f),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = summary.title.replace("Solo · ", "Solo with "),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = colors.text,
+                        )
+                        TextButton(
+                            onClick = {
+                                viewModel.startSolo(
+                                    summary.memberId,
+                                    summary.title.removePrefix("Solo · "),
+                                )
+                            }
+                        ) { Text("Continue solo") }
+                    }
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -904,7 +978,12 @@ fun MainPage(
                             OutlinedTextField(
                                 value = inputText,
                                 onValueChange = { inputText = it },
-                                placeholder = { Text("Type a message...") },
+                                placeholder = {
+                                    Text(
+                                        if (canWrite) "Type a message..." else "Read-only conversation"
+                                    )
+                                },
+                                enabled = canWrite,
                                 modifier = Modifier
                                     .weight(1f)
                                     .padding(end = 8.dp),
@@ -919,7 +998,7 @@ fun MainPage(
 
                 SendActionButton(
                     connected = viewModel.connected,
-                    canSend = viewModel.connected && (inputText.isNotBlank() || pendingImages.isNotEmpty()),
+                    canSend = canWrite && viewModel.connected && (inputText.isNotBlank() || pendingImages.isNotEmpty()),
                     onSend = {
                         val names = normalizeAttachmentNames(pendingImages.map { it.second })
                         viewModel.sendMessage(
@@ -1003,8 +1082,99 @@ fun MainPage(
                 } else {
                     null
                 },
+                soloActive = solo.active,
+                soloTargetId = solo.targetId,
+                onSolo = if (!target.isSelf && target.member.present && !solo.active) {
+                    { viewModel.startSolo(target.member.memberId, target.member.memberName) }
+                } else if (!target.isSelf && solo.active && solo.targetId == target.member.memberId) {
+                    { confirmEndSolo = true }
+                } else {
+                    null
+                },
             )
         }
+    }
+
+    if (showConversations) {
+        AlertDialog(
+            onDismissRequest = { showConversations = false },
+            title = { Text("Conversations") },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(viewModel.conversations, key = { it.id }) { conversation ->
+                        val active = conversation.id == viewModel.currentConversationId
+                        TokiSurface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.selectConversation(conversation.id)
+                                    showConversations = false
+                                },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (active) {
+                                colors.accentPink.copy(alpha = 0.18f)
+                            } else {
+                                colors.bgCard.copy(alpha = 0.72f)
+                            },
+                            borderColor = if (active) {
+                                colors.accentPink.copy(alpha = 0.52f)
+                            } else {
+                                colors.stroke.copy(alpha = 0.5f)
+                            },
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = conversation.title,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                if (conversation.id.startsWith("solo:") &&
+                                    viewModel.soloState.active &&
+                                    conversation.memberId == viewModel.soloState.targetId
+                                ) {
+                                    Text(
+                                        text = "ACTIVE",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = colors.accentPink,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showConversations = false }) { Text("Close") }
+            },
+        )
+    }
+
+    if (confirmEndSolo) {
+        AlertDialog(
+            onDismissRequest = { confirmEndSolo = false },
+            title = { Text("End solo time?") },
+            text = { Text("The solo conversation stays saved, and the group chat will resume.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmEndSolo = false
+                        profileTarget = null
+                        viewModel.endSolo()
+                    }
+                ) { Text("End solo") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmEndSolo = false }) { Text("Cancel") }
+            },
+        )
     }
 
         val renameIndex = renameImageIndex
@@ -1069,6 +1239,42 @@ fun MainPage(
 
 }
 
+@Composable
+private fun SoloBanner(
+    solo: SoloState,
+    viewingActive: Boolean,
+    onReturn: () -> Unit,
+    onEnd: () -> Unit,
+) {
+    val colors = tokiColors
+    TokiSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .padding(top = 132.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = colors.bgPanel.copy(alpha = 0.92f),
+        borderColor = colors.accentPink.copy(alpha = 0.52f),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Solo · ${solo.targetName}",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleSmall,
+                color = colors.text,
+            )
+            if (!viewingActive) {
+                TextButton(onClick = onReturn) { Text("Return") }
+            }
+            TextButton(onClick = onEnd) { Text("End solo") }
+        }
+    }
+}
+
 private enum class MenuAction { File, Photo, Settings }
 
 private enum class ComposerDragLock { None, Send, Menu, Ignore }
@@ -1080,6 +1286,7 @@ private fun AkiStatusBar(
     avatars: Map<String, ByteArray>,
     onSelect: (String) -> Unit,
     onShowInfo: (AgentStatus) -> Unit,
+    onOpenConversations: () -> Unit,
 ) {
     val colors = tokiColors
     TokiSurface(
@@ -1120,6 +1327,16 @@ private fun AkiStatusBar(
                             onShowProfile = { onShowInfo(member) },
                         )
                     }
+                }
+                IconButton(
+                    onClick = onOpenConversations,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.List,
+                        contentDescription = "Conversations",
+                        tint = colors.textDim,
+                    )
                 }
                 if (status.agentId.isNotBlank()) {
                     IconButton(

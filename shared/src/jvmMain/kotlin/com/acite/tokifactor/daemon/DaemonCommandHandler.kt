@@ -58,6 +58,15 @@ class DaemonCommandHandler(
             DaemonProtocol.COMMAND_ADD_SYSTEM_MESSAGE -> withContext(Dispatchers.Main) {
                 engine.addMessage(frame.content, frame.isError)
             }
+            DaemonProtocol.COMMAND_START_SOLO -> withContext(Dispatchers.Main) {
+                engine.startSolo(frame.soloTargetId, frame.soloTargetName)
+            }
+            DaemonProtocol.COMMAND_END_SOLO -> withContext(Dispatchers.Main) {
+                engine.endSolo()
+            }
+            DaemonProtocol.COMMAND_SELECT_CONVERSATION -> withContext(Dispatchers.Main) {
+                engine.selectConversation(frame.conversationId)
+            }
             DaemonProtocol.COMMAND_PING -> Unit
             else -> return DaemonCommandResult(false, "unknown command: ${frame.command}")
         }

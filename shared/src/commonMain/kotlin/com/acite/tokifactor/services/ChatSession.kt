@@ -2,7 +2,9 @@ package com.acite.tokifactor.services
 
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ConversationSummary
 import com.acite.tokifactor.model.InboundNotice
+import com.acite.tokifactor.model.SoloState
 import io.github.vinceglb.filekit.core.PlatformFile
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +16,10 @@ data class OutgoingAttachment(
 
 interface ChatSession {
     val messages: List<ChatMessage>
+    val visibleMessages: List<ChatMessage>
+    val currentConversationId: String
+    val conversations: List<ConversationSummary>
+    val soloState: SoloState
     val avatarBytes: ByteArray?
     val connected: Boolean
     val agentStatus: AgentStatus
@@ -31,6 +37,9 @@ interface ChatSession {
     fun refreshSettings()
     fun findMember(name: String): AgentStatus?
     fun selectAgent(agentId: String)
+    fun selectConversation(conversationId: String)
+    fun startSolo(memberId: String, memberName: String)
+    fun endSolo()
     fun addMessage(content: String, isError: Boolean = false)
     fun removeMessage(id: String)
     fun deleteMessages(ids: Collection<String>)

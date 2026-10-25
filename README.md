@@ -48,6 +48,13 @@ The channel exists for as long as clients stay connected. There is nothing to de
   `Info` and every member avatar open a full member profile. Tokifactor users also
   announce a profile, so humans and agents share the same roster. Without remote
   members, the app stays a normal tokifactor chat client.
+- **Solo time:** open an agent profile and choose **Solo time** to switch to that
+  member's derived private channel. The group connection stays alive, so group
+  messages and notifications continue to arrive; aki-layer remains owned by Aki.
+  The conversation
+  panel separates the persistent group history from each member's shared solo history;
+  historical solo sessions are read-only until you resume them. `akictl solo` uses the
+  same retained-control handshake.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope.
 - Agent replies with multiple blank-line-separated paragraphs render as separate

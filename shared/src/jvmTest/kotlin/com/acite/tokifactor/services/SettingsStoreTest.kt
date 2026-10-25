@@ -56,4 +56,27 @@ class SettingsStoreTest {
         assertTrue(store.memberId.startsWith("mem_"))
         assertFalse(store.identityBound)
     }
+
+    @Test
+    fun soloStateAndConversationSurviveReload() {
+        System.setProperty("user.home", tempHome.absolutePath)
+        val store = SettingsStore()
+        store.updateSoloState(
+            sessionId = "solo-123",
+            targetId = "legacy_aki",
+            targetName = "Aki",
+            startedAt = "2026-10-25T00:00:00Z",
+            conversationId = "solo:legacy_aki",
+        )
+        val reloaded = SettingsStore()
+        assertTrue(reloaded.soloActive)
+        assertEquals("solo-123", reloaded.soloSessionId)
+        assertEquals("legacy_aki", reloaded.soloTargetId)
+        assertEquals("Aki", reloaded.soloTargetName)
+        assertEquals("solo:legacy_aki", reloaded.conversationId)
+        reloaded.clearSoloState()
+        val ended = SettingsStore()
+        assertFalse(ended.soloActive)
+        assertEquals("group", ended.conversationId)
+    }
 }

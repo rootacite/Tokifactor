@@ -11,6 +11,15 @@ import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.AvatarEnvelope
 import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ConversationSummary
+import com.acite.tokifactor.model.GROUP_CONVERSATION
+import com.acite.tokifactor.model.SOLO_END
+import com.acite.tokifactor.model.SOLO_FAILED
+import com.acite.tokifactor.model.SOLO_READY
+import com.acite.tokifactor.model.SOLO_START
+import com.acite.tokifactor.model.SoloState
+import com.acite.tokifactor.model.deriveSoloMagic
+import com.acite.tokifactor.model.soloConversationId
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.InboundNotice
 import com.acite.tokifactor.model.MEMBER_KIND_USER
@@ -78,6 +87,67 @@ class ChatEngine @Inject constructor(
     override val messages: List<ChatMessage>
         field = mutableStateListOf()
 
+    override var currentConversationId by mutableStateOf(settingsStore.conversationId)
+        private set
+
+    override var soloState by mutableStateOf(
+        SoloState(
+            active = settingsStore.soloActive,
+            phase = if (settingsStore.soloActive) "active" else "idle",
+            sessionId = settingsStore.soloSessionId,
+            targetId = settingsStore.soloTargetId,
+            targetName = settingsStore.soloTargetName,
+            startedAt = settingsStore.soloStartedAt,
+        )
+    )
+        private set
+
+    override val visibleMessages: List<ChatMessage>
+        get() = messages.filter { it.conversationId == currentConversationId }
+
+    override val conversations: List<ConversationSummary>
+        get() {
+            val summaries = linkedMapOf<String, ConversationSummary>()
+            summaries[GROUP_CONVERSATION] = ConversationSummary(
+                id = GROUP_CONVERSATION,
+                title = "Group chat",
+            )
+            for (message in messages) {
+                val id = message.conversationId
+                if (!id.startsWith("solo:")) continue
+                val memberId = id.removePrefix("solo:")
+                val title = if (soloState.active && memberId == soloState.targetId) {
+                    "Solo · ${soloState.targetName}"
+                } else {
+                    "Solo · ${identityRegistry.get(memberId)?.name ?: memberId}"
+                }
+                val previous = summaries[id]
+                summaries[id] = ConversationSummary(
+                    id = id,
+                    title = title,
+                    memberId = memberId,
+                    lastMessageAt = maxOf(previous?.lastMessageAt ?: 0L, message.sentAt),
+                )
+            }
+            if (soloState.active && soloState.targetId.isNotBlank()) {
+                val id = soloConversationId(soloState.targetId)
+                summaries[id] = ConversationSummary(
+                    id = id,
+                    title = "Solo · ${soloState.targetName}",
+                    memberId = soloState.targetId,
+                    lastMessageAt = summaries[id]?.lastMessageAt ?: 0L,
+                )
+            }
+            return summaries.values.sortedWith(
+                compareBy<ConversationSummary> { it.id != GROUP_CONVERSATION }
+                    .thenByDescending { it.lastMessageAt }
+            )
+        }
+
+    private var pendingSoloStart: String = ""
+    private var pendingSoloTargetId: String = ""
+    private var pendingSoloTargetName: String = ""
+
     override var avatarBytes by mutableStateOf(settingsStore.avatarBytes)
         private set
 
@@ -95,6 +165,10 @@ class ChatEngine @Inject constructor(
     override val members: List<AgentStatus>
         get() = memberStates.values
             .filter { it.present }
+            .filter {
+                !currentConversationId.startsWith("solo:") ||
+                    it.memberId == currentConversationId.removePrefix("solo:")
+            }
             .sortedWith(compareBy<AgentStatus>(
                 { it.memberName.lowercase() != "aki" && !it.aliasList().any { alias -> alias.lowercase() == "aki" } },
                 { it.memberName.lowercase() },
@@ -102,10 +176,232 @@ class ChatEngine @Inject constructor(
             ))
 
     override val agentStatus: AgentStatus
-        get() = selectedMember(memberStates.values, selectedAgentId) ?: AgentStatus()
+        get() = selectedMember(members, selectedAgentId) ?: AgentStatus()
 
     override fun selectAgent(agentId: String) {
         if (agentId.isNotBlank()) selectedAgentId = agentId
+    }
+
+    override fun selectConversation(conversationId: String) {
+        if (conversationId.isBlank()) return
+        currentConversationId = conversationId
+        settingsStore.updateConversationId(conversationId)
+        emitStateChanged()
+    }
+
+    private fun emitStateChanged() {
+        emitEvent(ChatEngineEvent.StateChanged(currentConversationId, soloState))
+    }
+
+    private fun soloMagic(): String? {
+        val target = soloState.targetId
+        if (target.isBlank() || !soloState.active) return null
+        return deriveSoloMagic(settingsStore.magicString, target)
+    }
+
+    private fun activeMagicCandidates(): List<String> = listOfNotNull(
+        soloMagic()?.takeIf { soloState.active },
+        settingsStore.magicString,
+    ).distinct()
+
+    private fun magicForConversation(conversationId: String): String {
+        if (!conversationId.startsWith("solo:")) return settingsStore.magicString
+        val target = conversationId.removePrefix("solo:")
+        return deriveSoloMagic(settingsStore.magicString, target)
+    }
+
+    private fun canSendInCurrentConversation(): Boolean {
+        if (!soloState.active) return currentConversationId == GROUP_CONVERSATION
+        return currentConversationId == soloConversationId(soloState.targetId)
+    }
+
+    private fun soloControlMetadata(
+        kind: String,
+        sessionId: String,
+        targetId: String,
+        targetName: String,
+        startedAt: String,
+        error: String = "",
+    ): Map<String, String> = mapOf(
+        "schema" to "akid.v1",
+        "kind" to kind,
+        "protocolVersion" to PROTOCOL_VERSION.toString(),
+        "memberId" to settingsStore.memberId,
+        "memberName" to settingsStore.displayName,
+        "sourceId" to settingsStore.deviceId,
+        "memberKind" to MEMBER_KIND_USER,
+        "soloId" to sessionId,
+        "soloTargetId" to targetId,
+        "soloTargetName" to targetName,
+        "soloStartedAt" to startedAt,
+        if (error.isBlank()) "" to "" else "soloError" to error,
+    ).filterKeys { it.isNotEmpty() }
+
+    private suspend fun publishSoloControl(
+        kind: String,
+        sessionId: String,
+        targetId: String,
+        targetName: String,
+        startedAt: String,
+        magic: String,
+        retain: Boolean,
+        error: String = "",
+    ) {
+        val envelope = TextEnvelope(
+            sender = settingsStore.displayName,
+            text = "tokifactor solo control",
+            senderId = settingsStore.memberId,
+            metadata = soloControlMetadata(
+                kind = kind,
+                sessionId = sessionId,
+                targetId = targetId,
+                targetName = targetName,
+                startedAt = startedAt,
+                error = error,
+            ),
+        )
+        val payload = Base64.encode(
+            SecureMessageChannel.encrypt(
+                envelope.encode().encodeToByteArray(),
+                magic,
+            )
+        )
+        mqttService.publish(
+            CONTROL_TOPIC,
+            payload,
+            MqttDeliveryQos.AtLeastOnce,
+            retain = retain,
+        )
+    }
+
+    override fun startSolo(memberId: String, memberName: String) {
+        if (memberId.isBlank()) return
+        if (soloState.active || soloState.phase == "starting") return
+        val sessionId = "solo-${UUID.randomUUID()}"
+        val startedAt = java.time.Instant.now().toString()
+        pendingSoloStart = sessionId
+        pendingSoloTargetId = memberId
+        pendingSoloTargetName = memberName
+        soloState = SoloState(
+            active = false,
+            phase = "starting",
+            sessionId = sessionId,
+            targetId = memberId,
+            targetName = memberName,
+            startedAt = startedAt,
+        )
+        emitStateChanged()
+        scope.launch(Dispatchers.IO) {
+            try {
+                publishSoloControl(
+                    SOLO_START,
+                    sessionId,
+                    memberId,
+                    memberName,
+                    startedAt,
+                    settingsStore.magicString,
+                    retain = true,
+                )
+            } catch (_: Exception) {
+                failPendingSolo("cannot publish solo start")
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            delay(8_000L)
+            if (pendingSoloStart == sessionId && !soloState.active) {
+                failPendingSolo("solo target did not become ready")
+            }
+        }
+    }
+
+    private fun failPendingSolo(message: String) {
+        val sessionId = pendingSoloStart
+        val targetId = pendingSoloTargetId
+        val targetName = pendingSoloTargetName
+        pendingSoloStart = ""
+        pendingSoloTargetId = ""
+        pendingSoloTargetName = ""
+        soloState = SoloState(active = false, phase = "error", error = message)
+        emitStateChanged()
+        if (sessionId.isNotBlank() && targetId.isNotBlank()) {
+            scope.launch(Dispatchers.IO) {
+                try {
+                    publishSoloControl(
+                        SOLO_END,
+                        sessionId,
+                        targetId,
+                        targetName,
+                        "",
+                        settingsStore.magicString,
+                        retain = true,
+                    )
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun activateSolo(
+        sessionId: String,
+        targetId: String,
+        targetName: String,
+        startedAt: String,
+    ) {
+        pendingSoloStart = ""
+        pendingSoloTargetId = ""
+        pendingSoloTargetName = ""
+        soloState = SoloState(
+            active = true,
+            phase = "active",
+            sessionId = sessionId,
+            targetId = targetId,
+            targetName = targetName,
+            startedAt = startedAt,
+        )
+        val conversationId = soloConversationId(targetId)
+        currentConversationId = conversationId
+        settingsStore.updateSoloState(
+            sessionId = sessionId,
+            targetId = targetId,
+            targetName = targetName,
+            startedAt = startedAt,
+            conversationId = conversationId,
+        )
+        selectedAgentId = targetId
+        emitStateChanged()
+    }
+
+    override fun endSolo() {
+        val session = soloState
+        if (!session.sessionId.isNotBlank() && !session.active) return
+        soloState = SoloState(active = false, phase = "ending")
+        currentConversationId = GROUP_CONVERSATION
+        settingsStore.clearSoloState(GROUP_CONVERSATION)
+        emitStateChanged()
+        scope.launch(Dispatchers.IO) {
+            val groupMagic = settingsStore.magicString
+            val soloMagic = if (session.targetId.isNotBlank()) {
+                deriveSoloMagic(groupMagic, session.targetId)
+            } else {
+                ""
+            }
+            for (magic in listOf(soloMagic, groupMagic).filter { it.isNotBlank() }.distinct()) {
+                try {
+                    publishSoloControl(
+                        SOLO_END,
+                        session.sessionId,
+                        session.targetId,
+                        session.targetName,
+                        session.startedAt,
+                        magic,
+                        retain = true,
+                    )
+                } catch (_: Exception) {
+                }
+            }
+            soloState = SoloState(active = false, phase = "idle")
+            emitStateChanged()
+        }
     }
 
     override fun findMember(name: String): AgentStatus? =
@@ -178,6 +474,7 @@ class ChatEngine @Inject constructor(
     private val incomingWatchdogs = mutableMapOf<String, Job>()
     private val abortedTransfers = mutableSetOf<String>()
     private val completedTransfers = ConcurrentHashMap.newKeySet<String>()
+    private val transferConversations = ConcurrentHashMap<String, String>()
     private val outgoingJobs = mutableMapOf<String, Job>()
 
     private var mqttSessionJob: Job? = null
@@ -429,27 +726,23 @@ class ChatEngine @Inject constructor(
                                     val chunk = TextChunk.decode(message.payload) ?: return@collect
                                     handleIncomingText(chunk, message.timestamp)
                                 } else {
-                                    withContext(Dispatchers.Main) {
-                                        try {
-                                            val chip = Base64.decode(message.payload)
-                                            val clear = SecureMessageChannel.decrypt(chip, settingsStore.magicString).decodeToString()
-                                            val envelope = TextEnvelope.decode(clear)
-                                            if (envelope != null) {
-                                                applyIncomingEnvelope(envelope, message.timestamp)
-                                                notePeerAvatar(
-                                                    resolveIncomingMemberId(
-                                                        envelope.sender,
-                                                        envelope.senderId,
-                                                        envelope.metadata,
-                                                    ),
-                                                    envelope.avatarHash,
-                                                )
-                                            } else {
-                                                addChatText(clear, sender = "Unknown", isMine = false)
-                                            }
-                                        } catch (_: Exception) {
-                                        }
-                                    }
+                                    val decoded = withContext(Dispatchers.Default) {
+                                        decodeEnvelopeWithMagic(message.payload)
+                                    } ?: return@collect
+                                    val (envelope, magic) = decoded
+                                    applyIncomingEnvelope(envelope, message.timestamp)
+                                    tagEnvelopeConversation(
+                                        envelope,
+                                        conversationForMagic(magic),
+                                    )
+                                    notePeerAvatar(
+                                        resolveIncomingMemberId(
+                                            envelope.sender,
+                                            envelope.senderId,
+                                            envelope.metadata,
+                                        ),
+                                        envelope.avatarHash,
+                                    )
                                 }
                             } catch (_: Exception) {
                             }
@@ -482,7 +775,7 @@ class ChatEngine @Inject constructor(
                         }
                 }
                 launch {
-                    mqttService.subscribe(CONTROL_TOPIC, MqttDeliveryQos.AtMostOnce)
+                    mqttService.subscribe(CONTROL_TOPIC, MqttDeliveryQos.AtLeastOnce)
                         .collect { message ->
                             try {
                                 val envelope = decodeEnvelope(message.payload)
@@ -520,18 +813,69 @@ class ChatEngine @Inject constructor(
         }
     }
 
-    private fun decodeEnvelope(payload: String): TextEnvelope? {
+    private fun decodeEnvelopeWithMagic(payload: String): Pair<TextEnvelope, String>? {
         val cipher = try {
             Base64.decode(payload)
         } catch (_: Exception) {
             return null
         }
-        val clear = try {
-            SecureMessageChannel.decrypt(cipher, settingsStore.magicString).decodeToString()
-        } catch (_: Exception) {
-            return null
+        for (magic in activeMagicCandidates()) {
+            val clear = try {
+                SecureMessageChannel.decrypt(cipher, magic).decodeToString()
+            } catch (_: Exception) {
+                continue
+            }
+            val envelope = TextEnvelope.decode(clear) ?: continue
+            return envelope to magic
         }
-        return TextEnvelope.decode(clear)
+        return null
+    }
+
+    private fun decodeEnvelope(payload: String): TextEnvelope? =
+        decodeEnvelopeWithMagic(payload)?.first
+
+    private fun conversationForMagic(magic: String): String {
+        val target = soloState.targetId
+        if (
+            soloState.active &&
+            target.isNotBlank() &&
+            magic == deriveSoloMagic(settingsStore.magicString, target)
+        ) {
+            return soloConversationId(target)
+        }
+        return GROUP_CONVERSATION
+    }
+
+    private fun conversationForIncomingSender(senderId: String): String {
+        val target = soloState.targetId
+        return if (soloState.active && target.isNotBlank() && senderId == target) {
+            soloConversationId(target)
+        } else {
+            GROUP_CONVERSATION
+        }
+    }
+
+    private fun tagEnvelopeConversation(
+        envelope: TextEnvelope,
+        conversationId: String,
+    ) {
+        if (conversationId == GROUP_CONVERSATION) return
+        val messageId = envelope.messageId
+        val turnId = envelope.metadata["turnId"].orEmpty()
+        scope.launch(Dispatchers.Main) {
+            for (index in messages.indices) {
+                val current = messages[index]
+                if (
+                    (messageId.isNotBlank() && current.id == messageId) ||
+                    (turnId.isNotBlank() && current.turnId == turnId)
+                ) {
+                    if (current.conversationId != conversationId) {
+                        messages[index] = current.copy(conversationId = conversationId)
+                        emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
+                    }
+                }
+            }
+        }
     }
 
     private fun parseBoolean(value: String?): Boolean? = when (value?.lowercase()) {
@@ -650,6 +994,10 @@ class ChatEngine @Inject constructor(
         val meta = envelope.metadata
         if (meta["schema"] != "akid.v1") return
         val kind = meta["kind"].orEmpty()
+        if (kind == SOLO_START || kind == SOLO_READY || kind == SOLO_FAILED || kind == SOLO_END) {
+            applySoloControl(meta)
+            return
+        }
         if (kind != "presence" && kind != "status" && kind != "offline") return
         if (meta["protocolVersion"]?.toIntOrNull() != PROTOCOL_VERSION) return
         val senderId = envelope.senderId
@@ -750,6 +1098,64 @@ class ChatEngine @Inject constructor(
         emitMembersChanged()
     }
 
+    private fun applySoloControl(meta: Map<String, String>) {
+        val kind = meta["kind"].orEmpty()
+        val sessionId = meta["soloId"].orEmpty()
+        val targetId = meta["soloTargetId"].orEmpty()
+        val targetName = meta["soloTargetName"].orEmpty()
+        val startedAt = meta["soloStartedAt"].orEmpty()
+        if (sessionId.isBlank() || targetId.isBlank()) return
+        when (kind) {
+            SOLO_START -> {
+                if (soloState.active && soloState.sessionId == sessionId) return
+                if (soloState.active && soloState.sessionId != sessionId) return
+                if (pendingSoloStart.isBlank()) {
+                    activateSolo(sessionId, targetId, targetName, startedAt)
+                }
+            }
+            SOLO_READY -> {
+                if (
+                    soloState.active &&
+                    soloState.sessionId == sessionId
+                ) return
+                if (pendingSoloStart.isNotBlank() && pendingSoloStart != sessionId) return
+                activateSolo(sessionId, targetId, targetName, startedAt)
+            }
+            SOLO_FAILED -> {
+                if (
+                    (pendingSoloStart.isBlank() || pendingSoloStart == sessionId) &&
+                    (!soloState.active || soloState.sessionId == sessionId)
+                ) {
+                    pendingSoloStart = ""
+                    soloState = SoloState(
+                        active = false,
+                        phase = "error",
+                        sessionId = sessionId,
+                        targetId = targetId,
+                        targetName = targetName,
+                        error = meta["soloError"].orEmpty().ifBlank { "solo failed" },
+                    )
+                }
+            }
+            SOLO_END -> {
+                if (
+                    soloState.sessionId.isBlank() ||
+                    soloState.sessionId == sessionId
+                ) {
+                    pendingSoloStart = ""
+                    pendingSoloTargetId = ""
+                    pendingSoloTargetName = ""
+                    soloState = SoloState(active = false, phase = "idle")
+                    if (currentConversationId.startsWith("solo:")) {
+                        currentConversationId = GROUP_CONVERSATION
+                    }
+                    settingsStore.clearSoloState(currentConversationId)
+                    emitStateChanged()
+                }
+            }
+        }
+    }
+
     override fun addMessage(content: String, isError: Boolean) {
         insertMessage(
             ChatMessage(
@@ -772,12 +1178,14 @@ class ChatEngine @Inject constructor(
         id: String = UUID.randomUUID().toString(),
         sentAt: Long = System.currentTimeMillis(),
         attachments: List<ChatAttachment> = emptyList(),
+        conversationId: String = GROUP_CONVERSATION,
     ) {
         if (messages.any { it.id == id }) return
         val message = ChatMessage(
             id = id,
             content = content,
             pic = null,
+            conversationId = conversationId,
             sender = sender,
             senderId = senderId,
             isMine = isMine,
@@ -958,6 +1366,12 @@ class ChatEngine @Inject constructor(
         val envelope = group.envelope
         if (envelope != null) {
             applyIncomingEnvelope(envelope, group.eventAt, attachments, false)
+            tagEnvelopeConversation(
+                envelope,
+                conversationForIncomingSender(
+                    resolveIncomingMemberId(group.sender, group.senderId, group.metadata)
+                ),
+            )
             return
         }
         if (attachments.isEmpty()) return
@@ -967,6 +1381,9 @@ class ChatEngine @Inject constructor(
             id = id,
             content = "",
             pic = null,
+            conversationId = conversationForIncomingSender(
+                resolveIncomingMemberId(group.sender, group.senderId, group.metadata)
+            ),
             sender = group.sender,
             senderId = resolveIncomingMemberId(group.sender, group.senderId, group.metadata),
             isMine = isOwnMember(group.senderId),
@@ -1339,6 +1756,7 @@ class ChatEngine @Inject constructor(
 
     override fun sendMessage(content: String, attachments: List<OutgoingAttachment>) {
         if (!connected) return
+        if (!canSendInCurrentConversation()) return
         if (attachments.isNotEmpty()) {
             sendRichMessage(content, attachments)
             return
@@ -1352,6 +1770,8 @@ class ChatEngine @Inject constructor(
         val sentAt = System.currentTimeMillis()
         val senderId = settingsStore.memberId
         val messageId = TextEnvelope.messageId(senderId, sentAt, content)
+        val sendConversation = currentConversationId
+        val sendMagic = magicForConversation(sendConversation)
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
             text = content,
@@ -1364,7 +1784,7 @@ class ChatEngine @Inject constructor(
                 "memberName" to settingsStore.displayName,
             ),
         ).encode()
-        val c = SecureMessageChannel.encrypt(envelope.encodeToByteArray(), settingsStore.magicString)
+        val c = SecureMessageChannel.encrypt(envelope.encodeToByteArray(), sendMagic)
         val msg = Base64.encode(c)
         val size = mqttService.getMaximumPacketSize()
         if (size != null && msg.encodeToByteArray().size > size) {
@@ -1378,6 +1798,7 @@ class ChatEngine @Inject constructor(
             isMine = true,
             id = messageId,
             sentAt = sentAt,
+            conversationId = sendConversation,
         )
         scope.launch(Dispatchers.IO) {
             try {
@@ -1389,6 +1810,7 @@ class ChatEngine @Inject constructor(
 
     private fun sendRichMessage(content: String, selected: List<OutgoingAttachment>) {
         if (!connected) return
+        if (!canSendInCurrentConversation()) return
         if (selected.isEmpty() || selected.size > 4) {
             addMessage("Error : a message may contain at most 4 images.", true)
             return
@@ -1398,6 +1820,8 @@ class ChatEngine @Inject constructor(
         val avatarHash = ownAvatarHash()
         val messageId = UUID.randomUUID().toString()
         val sentAt = System.currentTimeMillis()
+        val sendConversation = currentConversationId
+        val sendMagic = magicForConversation(sendConversation)
 
         data class Prepared(
             val transferId: String,
@@ -1448,6 +1872,7 @@ class ChatEngine @Inject constructor(
                             id = messageId,
                             content = content,
                             pic = null,
+                            conversationId = sendConversation,
                             sender = senderName,
                             senderId = senderId,
                             isMine = true,
@@ -1478,6 +1903,7 @@ class ChatEngine @Inject constructor(
                         total = attachment.total,
                         maxPacket = maxPacket,
                         topic = "tokifactor/picture",
+                        magic = sendMagic,
                         encodeChunk = { chunkIndex, encryptedB64 ->
                             PictureChunk(
                                 transferId = attachment.transferId,
@@ -1494,7 +1920,7 @@ class ChatEngine @Inject constructor(
                                 textCommit = content.isNotBlank(),
                                 sentAt = sentAt,
                                 size = attachment.fileSize,
-                                captionEncrypted = encryptCaption(attachment.name),
+                                captionEncrypted = encryptCaption(attachment.name, sendMagic),
                             ).encode()
                         },
                         onProgress = { completed, total ->
@@ -1533,6 +1959,7 @@ class ChatEngine @Inject constructor(
                                 size = it.fileSize,
                             )
                         },
+                        sendMagic,
                     )
                 }
                 withContext(Dispatchers.Main) {
@@ -1605,6 +2032,7 @@ class ChatEngine @Inject constructor(
         messageId: String,
         sentAt: Long,
         attachments: List<ChatAttachment>,
+        magic: String,
     ) {
         val metadata = attachmentMetadata(attachments)
         val utf8 = content.encodeToByteArray()
@@ -1619,7 +2047,7 @@ class ChatEngine @Inject constructor(
                 metadata = metadata,
             ).encode()
             val encrypted = SecureMessageChannel.encrypt(
-                envelope.encodeToByteArray(), settingsStore.magicString,
+                envelope.encodeToByteArray(), magic,
             )
             mqttService.publish("tokifactor/text", Base64.encode(encrypted))
             return
@@ -1636,6 +2064,7 @@ class ChatEngine @Inject constructor(
             total = total,
             maxPacket = mqttService.getMaximumPacketSize(),
             topic = "tokifactor/text",
+            magic = magic,
             encodeChunk = { index, encryptedB64 ->
                 TextChunk(
                     transferId = messageId,
@@ -1700,11 +2129,11 @@ class ChatEngine @Inject constructor(
         emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
     }
 
-    private fun encryptCaption(caption: String): String =
+    private fun encryptCaption(caption: String, magic: String): String =
         Base64.encode(
             SecureMessageChannel.encrypt(
                 caption.encodeToByteArray(),
-                settingsStore.magicString,
+                magic,
             )
         )
 
@@ -1721,6 +2150,8 @@ class ChatEngine @Inject constructor(
         val avatarHash = ownAvatarHash()
         val sentAt = System.currentTimeMillis()
         val transferId = TextEnvelope.messageId(senderId, sentAt, content)
+        val sendConversation = currentConversationId
+        val sendMagic = magicForConversation(sendConversation)
         val job = scope.launch(Dispatchers.IO) {
             try {
                 val payloadFile = ChunkedTransfer.payloadFile(transferId)
@@ -1735,6 +2166,7 @@ class ChatEngine @Inject constructor(
                             id = transferId,
                             content = content,
                             pic = null,
+                            conversationId = sendConversation,
                             sender = senderName,
                             senderId = senderId,
                             isMine = true,
@@ -1755,6 +2187,7 @@ class ChatEngine @Inject constructor(
                     total = total,
                     maxPacket = maxPacket,
                     topic = "tokifactor/text",
+                    magic = sendMagic,
                 ) { index, encryptedB64 ->
                     TextChunk(
                         transferId = transferId,
@@ -1839,6 +2272,7 @@ class ChatEngine @Inject constructor(
 
     private fun sendBinary(file: PlatformFile, asFile: Boolean, failLabel: String) {
         if (!connected) return
+        if (!canSendInCurrentConversation()) return
         val senderName = settingsStore.displayName
         val senderId = settingsStore.memberId
         val avatarHash = ownAvatarHash()
@@ -1846,6 +2280,8 @@ class ChatEngine @Inject constructor(
         var sendTopic = if (asFile) "tokifactor/file" else "tokifactor/picture"
         val sentAt = System.currentTimeMillis()
         val transferId = UUID.randomUUID().toString()
+        val sendConversation = currentConversationId
+        val sendMagic = magicForConversation(sendConversation)
         val job = scope.launch(Dispatchers.IO) {
             try {
                 val payloadFile = ChunkedTransfer.payloadFile(transferId)
@@ -1870,6 +2306,7 @@ class ChatEngine @Inject constructor(
                             id = transferId,
                             content = fileName ?: "",
                             pic = preview,
+                            conversationId = sendConversation,
                             sender = senderName,
                             senderId = senderId,
                             isMine = true,
@@ -1891,6 +2328,7 @@ class ChatEngine @Inject constructor(
                     total = total,
                     maxPacket = maxPacket,
                     topic = sendTopic,
+                    magic = sendMagic,
                 ) { index, encryptedB64 ->
                     if (sendAsFile) {
                         FileChunk(
@@ -1996,6 +2434,7 @@ class ChatEngine @Inject constructor(
         total: Int,
         maxPacket: Int?,
         topic: String,
+        magic: String,
         onProgress: ((completed: Int, total: Int) -> Unit)? = null,
         encodeChunk: (index: Int, encryptedB64: String) -> String,
     ) {
@@ -2010,7 +2449,7 @@ class ChatEngine @Inject constructor(
                 launch {
                     for (index in queue) {
                         val plain = ChunkedTransfer.readSlice(payloadFile, index, chunkSize, fileSize)
-                        val cipher = SecureMessageChannel.encrypt(plain, settingsStore.magicString)
+                        val cipher = SecureMessageChannel.encrypt(plain, magic)
                         val payload = encodeChunk(index, Base64.encode(cipher))
                         val wireSize = payload.encodeToByteArray().size
                         if (maxPacket != null && wireSize > maxPacket) {
@@ -2196,11 +2635,18 @@ class ChatEngine @Inject constructor(
         } catch (_: Exception) {
             return
         }
-        val clear = try {
-            SecureMessageChannel.decrypt(cipher, settingsStore.magicString)
-        } catch (_: Exception) {
-            return
+        var clear: ByteArray? = null
+        var transferConversation = GROUP_CONVERSATION
+        for (magic in activeMagicCandidates()) {
+            try {
+                clear = SecureMessageChannel.decrypt(cipher, magic)
+                transferConversation = conversationForMagic(magic)
+                break
+            } catch (_: Exception) {
+            }
         }
+        if (clear == null) return
+        transferConversations[transferId] = transferConversation
 
         try {
             ChunkedTransfer.writePart(transferId, index, clear)
@@ -2269,8 +2715,7 @@ class ChatEngine @Inject constructor(
                         if (messages.removeAll { it.id == transferId }) {
                             emitEvent(ChatEngineEvent.MessagesRemoved(setOf(transferId)))
                         }
-                        applyIncomingEnvelope(
-                            TextEnvelope(
+                        val envelope = TextEnvelope(
                                 sender = sender,
                                 text = text,
                                 senderId = memberId,
@@ -2278,8 +2723,14 @@ class ChatEngine @Inject constructor(
                                 messageId = messageId,
                                 sentAt = sentAt,
                                 metadata = metadata,
-                            ),
+                            )
+                        applyIncomingEnvelope(
+                            envelope,
                             receivedAt,
+                        )
+                        tagEnvelopeConversation(
+                            envelope,
+                            transferConversations[transferId] ?: GROUP_CONVERSATION,
                         )
                     } else {
                         updateMessage(transferId) {
@@ -2293,6 +2744,8 @@ class ChatEngine @Inject constructor(
                                 chunksReceived = 0,
                                 chunksTotal = 0,
                                 isChunkedText = false,
+                                conversationId = transferConversations[transferId]
+                                    ?: GROUP_CONVERSATION,
                                 isMine = isOwnMember(memberId),
                             )
                         }
@@ -2684,12 +3137,20 @@ class ChatEngine @Inject constructor(
             }
             return
         }
-        val clear = try {
-            val cipher = Base64.decode(envelope.data)
-            SecureMessageChannel.decrypt(cipher, settingsStore.magicString)
+        val cipher = try {
+            Base64.decode(envelope.data)
         } catch (_: Exception) {
             return
         }
+        var clear: ByteArray? = null
+        for (magic in activeMagicCandidates()) {
+            try {
+                clear = SecureMessageChannel.decrypt(cipher, magic)
+                break
+            } catch (_: Exception) {
+            }
+        }
+        if (clear == null) return
         val actual = ChunkedTransfer.sha256Hex(clear)
         if (!actual.equals(envelope.hash, ignoreCase = true)) return
         try {

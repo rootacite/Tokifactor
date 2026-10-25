@@ -72,6 +72,11 @@ data class TextEnvelope(
             "pendingApprovals",
             "uptimeS",
             "memoryTokens",
+            "soloId",
+            "soloTargetId",
+            "soloTargetName",
+            "soloStartedAt",
+            "soloError",
         )
 
         fun decode(payload: String): TextEnvelope? {
