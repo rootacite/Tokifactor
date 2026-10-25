@@ -3,6 +3,9 @@ package com.acite.tokifactor.services
 import com.acite.tokifactor.model.MemberIdentity
 import com.acite.tokifactor.model.legacyMemberId
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -58,5 +61,35 @@ class MemberIdentityRegistryTest {
         registry.register(MemberIdentity(id = aki, name = "Aki"), source = "a")
         registry.register(MemberIdentity(id = fuyu, name = "Fuyu"), source = "b")
         assertFailsWith<IdentityLabelConflict> { registry.rename(fuyu, "Aki") }
+    }
+
+    @Test
+    fun concurrentReadsAndObservesDoNotOverlapFileLocks() {
+        val registry = MemberIdentityRegistry()
+        val pool = Executors.newFixedThreadPool(8)
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(80)
+        val failures = mutableListOf<Throwable>()
+        repeat(80) { index ->
+            pool.execute {
+                try {
+                    start.await()
+                    val id = legacyMemberId("Member$index")
+                    if (index % 2 == 0) {
+                        registry.observe(MemberIdentity(id = id, name = "Member$index"), "d$index")
+                    } else {
+                        registry.get(id)
+                    }
+                } catch (t: Throwable) {
+                    synchronized(failures) { failures += t }
+                } finally {
+                    done.countDown()
+                }
+            }
+        }
+        start.countDown()
+        done.await(10, TimeUnit.SECONDS)
+        pool.shutdownNow()
+        assertEquals(emptyList(), failures)
     }
 }

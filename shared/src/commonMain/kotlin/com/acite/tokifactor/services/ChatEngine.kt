@@ -895,11 +895,11 @@ class ChatEngine @Inject constructor(
         akiControlJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val now = System.currentTimeMillis()
-                val expired = memberStates.filterValues {
-                    shouldExpireAki(it.present, it.lastSeenAt, now, STATUS_TIMEOUT_MS)
-                }
-                if (expired.isNotEmpty()) {
-                    withContext(Dispatchers.Main) {
+                val hasMembers = withContext(Dispatchers.Main) {
+                    val expired = memberStates.filterValues {
+                        shouldExpireAki(it.present, it.lastSeenAt, now, STATUS_TIMEOUT_MS)
+                    }
+                    if (expired.isNotEmpty()) {
                         for (key in expired.keys) {
                             val current = memberStates[key] ?: continue
                             val sources = memberSources[key]
@@ -922,8 +922,8 @@ class ChatEngine @Inject constructor(
                         }
                         emitMembersChanged()
                     }
+                    memberStates.values.any { it.present }
                 }
-                val hasMembers = memberStates.values.any { it.present }
                 val interval = if (hasMembers) ROSTER_PROBE_MS else IDLE_PROBE_MS
                 if (now - lastProbeSentAt >= interval) {
                     publishAkiProbe()

@@ -32,6 +32,7 @@ class IdentityLabelConflict(val label: String, val ownerId: String) :
 @SingleIn(AppScope::class)
 class MemberIdentityRegistry @Inject constructor() {
     private val json = Json { prettyPrint = true }
+    private val processLock = Any()
 
     fun get(memberId: String): MemberIdentity? = read().members[memberId]
 
@@ -88,7 +89,7 @@ class MemberIdentityRegistry @Inject constructor() {
         result
     }
 
-    private fun <T> locked(block: () -> T): T {
+    private fun <T> locked(block: () -> T): T = synchronized(processLock) {
         val path = appIdentitiesFile()
         path.parentFile?.mkdirs()
         val lock = File(path.parentFile, "${path.name}.lock")
@@ -98,7 +99,7 @@ class MemberIdentityRegistry @Inject constructor() {
             StandardOpenOption.WRITE,
         ).use { channel ->
             channel.lock().use {
-                return block()
+                block()
             }
         }
     }
