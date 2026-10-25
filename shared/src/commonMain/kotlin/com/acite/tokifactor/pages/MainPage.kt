@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
@@ -146,6 +147,7 @@ fun MessageImage(
 @Composable
 fun ByteImage(
     imageBytes: ByteArray,
+    contentDescription: String = "Image",
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Fit,
 ) {
@@ -159,7 +161,7 @@ fun ByteImage(
 
     AsyncImage(
         model = imageRequest,
-        contentDescription = "Image",
+        contentDescription = contentDescription,
         contentScale = contentScale,
         modifier = modifier
     )
@@ -367,7 +369,7 @@ fun MessageAttachmentStrip(
     }
 }
 
-private sealed class ChatDisplayItem {
+internal sealed class ChatDisplayItem {
     abstract val key: String
 
     sealed class MessageItem : ChatDisplayItem() {
@@ -378,12 +380,22 @@ private sealed class ChatDisplayItem {
         override val key: String = "message:${message.id}"
     }
 
-    data class AgentPart(
+    data class TextPart(
         override val message: ChatMessage,
         val index: Int,
         val isLast: Boolean,
     ) : MessageItem() {
-        override val key: String = "agent-part:${message.id}:$index"
+        override val key: String = "text-part:${message.id}:$index"
+    }
+
+    data class EmojiPart(
+        override val message: ChatMessage,
+        val token: EmojiToken,
+        val asset: EmojiAsset,
+        val index: Int,
+        val isLast: Boolean,
+    ) : MessageItem() {
+        override val key: String = "emoji:${message.id}:$index"
     }
 
     data class ToolGroup(
@@ -399,7 +411,10 @@ private data class MemberProfileTarget(
     val isSelf: Boolean,
 )
 
-private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplayItem> {
+internal fun buildChatDisplayItems(
+    messages: List<ChatMessage>,
+    emojiCatalog: EmojiCatalog,
+): List<ChatDisplayItem> {
     val items = mutableListOf<ChatDisplayItem>()
     var index = 0
     while (index < messages.size) {
@@ -413,15 +428,46 @@ private fun buildChatDisplayItems(messages: List<ChatMessage>): List<ChatDisplay
             continue
         }
         if (!message.isGroupableToolStep()) {
-            if (message.isAgent && message.agentKind == "turn" && message.content.isNotBlank()) {
-                val paragraphs = splitAgentParagraphs(message.content)
-                if (paragraphs.size > 1) {
-                    paragraphs.forEachIndexed { partIndex, paragraph ->
-                        items += ChatDisplayItem.AgentPart(
-                            message = message.copy(content = paragraph),
-                            index = partIndex,
-                            isLast = partIndex == paragraphs.lastIndex,
-                        )
+            val isAgentTurn = message.isAgent &&
+                message.agentKind == "turn" &&
+                message.content.isNotBlank()
+            val isUserText = !message.isAgent &&
+                !message.isSystem &&
+                !message.isFile &&
+                !message.isImage &&
+                message.content.isNotBlank()
+            if (isAgentTurn || isUserText) {
+                val segments = splitEmojiSegments(message.content, emojiCatalog)
+                val hasEmoji = segments.any { it is EmojiContentSegment.Emoji }
+                if (isAgentTurn || hasEmoji) {
+                    var displayIndex = 0
+                    segments.forEachIndexed { segmentIndex, segment ->
+                        when (segment) {
+                            is EmojiContentSegment.Text -> {
+                                val paragraphs = if (isAgentTurn) {
+                                    splitAgentParagraphs(segment.text)
+                                } else {
+                                    listOf(segment.text)
+                                }
+                                paragraphs.forEachIndexed { partIndex, paragraph ->
+                                    items += ChatDisplayItem.TextPart(
+                                        message = message.copy(content = paragraph),
+                                        index = displayIndex++,
+                                        isLast = segmentIndex == segments.lastIndex &&
+                                            partIndex == paragraphs.lastIndex,
+                                    )
+                                }
+                            }
+                            is EmojiContentSegment.Emoji -> {
+                                items += ChatDisplayItem.EmojiPart(
+                                    message = message,
+                                    token = segment.token,
+                                    asset = segment.asset,
+                                    index = displayIndex++,
+                                    isLast = segmentIndex == segments.lastIndex,
+                                )
+                            }
+                        }
                     }
                 } else {
                     items += ChatDisplayItem.Single(message)
@@ -465,6 +511,7 @@ fun MainPage(
     val pendingImages = remember { mutableStateListOf<Pair<PlatformFile, String>>() }
     var renameImageIndex by remember { mutableStateOf<Int?>(null) }
     var renameImageDraft by remember { mutableStateOf("") }
+    var showEmojiPicker by remember { mutableStateOf(false) }
     val colors = tokiColors
     val listState = rememberLazyListState()
     var selectionMode by remember { mutableStateOf(false) }
@@ -487,6 +534,7 @@ fun MainPage(
         viewModel.conversations.firstOrNull { it.id == id }
     }
     val agentStatus = viewModel.agentStatus
+    var emojiCatalog by remember { mutableStateOf(EmojiCatalog.EMPTY) }
 
     val imagePickerLauncher = rememberFilePickerLauncher(
         type = PickerType.Image
@@ -578,13 +626,14 @@ fun MainPage(
         }
     }
 
-    val displayItems by remember(viewModel.messages) {
-        derivedStateOf { buildChatDisplayItems(viewModel.messages) }
+    val displayItems by remember(viewModel.messages, emojiCatalog) {
+        derivedStateOf { buildChatDisplayItems(viewModel.messages, emojiCatalog) }
     }
     val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(Unit) {
         viewModel.refreshSettings()
+        emojiCatalog = EmojiRepository.catalog()
     }
 
     var lastScrolledConversation by remember { mutableStateOf<String?>(null) }
@@ -695,6 +744,15 @@ fun MainPage(
                                 openMessageProfile(message)
                             },
                         )
+                        is ChatDisplayItem.EmojiPart -> EmojiStickerMessage(
+                            message = item.message,
+                            token = item.token,
+                            asset = item.asset,
+                            showAttachments = item.isLast,
+                            mineAvatar = viewModel.avatarBytes,
+                            peerAvatar = messageAvatar(item.message),
+                            onAvatarClick = { openMessageProfile(item.message) },
+                        )
                         is ChatDisplayItem.MessageItem -> {
                             val message = item.message
                             when {
@@ -720,7 +778,7 @@ fun MainPage(
                                     "error" -> SystemChip(message = message)
                                     else -> AgentTextBubble(
                                         message = message,
-                                        showAttachments = item !is ChatDisplayItem.AgentPart || item.isLast,
+                                        showAttachments = item !is ChatDisplayItem.TextPart || item.isLast,
                                         mineAvatar = viewModel.avatarBytes,
                                         peerAvatar = messageAvatar(message),
                                         onAvatarClick = {
@@ -757,6 +815,7 @@ fun MainPage(
                                 )
                                 else -> TextBubble(
                                     message = message,
+                                    showAttachments = item !is ChatDisplayItem.TextPart || item.isLast,
                                     mineAvatar = viewModel.avatarBytes,
                                     peerAvatar = messageAvatar(message),
                                     onAvatarClick = {
@@ -969,6 +1028,27 @@ fun MainPage(
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            IconButton(
+                                onClick = { showEmojiPicker = true },
+                                enabled = canWrite &&
+                                    viewModel.connected &&
+                                    emojiCatalog.assets.isNotEmpty(),
+                                modifier = Modifier.size(40.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.EmojiEmotions,
+                                    contentDescription = "表情包",
+                                    tint = if (
+                                        canWrite &&
+                                        viewModel.connected &&
+                                        emojiCatalog.assets.isNotEmpty()
+                                    ) {
+                                        colors.accentPink
+                                    } else {
+                                        colors.textDim.copy(alpha = 0.38f)
+                                    },
+                                )
+                            }
                             OutlinedTextField(
                                 value = inputText,
                                 onValueChange = { inputText = it },
@@ -1167,6 +1247,19 @@ fun MainPage(
             },
             dismissButton = {
                 TextButton(onClick = { confirmEndSolo = false }) { Text("Cancel") }
+            },
+        )
+    }
+
+    if (showEmojiPicker) {
+        EmojiPickerDialog(
+            catalog = emojiCatalog,
+            onDismiss = { showEmojiPicker = false },
+            onSelect = { asset ->
+                if (viewModel.connected && canWrite) {
+                    viewModel.sendMessage(emojiToken(asset))
+                }
+                showEmojiPicker = false
             },
         )
     }
@@ -2586,7 +2679,7 @@ private fun bubbleShape(isMine: Boolean) = RoundedCornerShape(
 )
 
 @Composable
-private fun ChatRow(
+internal fun ChatRow(
     isMine: Boolean,
     sender: String,
     senderId: String = "",
@@ -2633,6 +2726,7 @@ private fun ChatRow(
 @Composable
 fun TextBubble(
     message: ChatMessage,
+    showAttachments: Boolean = true,
     mineAvatar: ByteArray? = null,
     peerAvatar: ByteArray? = null,
     onAvatarClick: (() -> Unit)? = null,
@@ -2729,7 +2823,7 @@ fun TextBubble(
                         color = contentColor.copy(alpha = 0.8f),
                     )
                 }
-                if (message.hasAttachments) {
+                if (showAttachments && message.hasAttachments) {
                     if (showPreview || message.isTransferring) Spacer(modifier = Modifier.height(8.dp))
                     MessageAttachmentStrip(attachments = message.attachments)
                 }

@@ -46,6 +46,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -571,7 +572,8 @@ class ChatEngine @Inject constructor(
             }
         }
         if (channelKey() != sessionChannelKey) {
-            startMqttSession()
+            // start() owns the first session start; racing it here can cancel an in-flight connect.
+            if (historyReady.get()) startMqttSession()
         } else if (connected) {
             scope.launch {
                 publishAkiProbe()
@@ -639,10 +641,13 @@ class ChatEngine @Inject constructor(
         val generation = sessionGeneration.incrementAndGet()
         sessionChannelKey = channelKey()
         avatarRefreshRequested.clear()
-        mqttSessionJob?.cancel()
         controlReady = false
         stopAkiControlLoop(clearIdentity = true)
+        val previous = mqttSessionJob
         mqttSessionJob = scope.launch {
+            // Let the old client finish disconnecting before the replacement reuses its client id.
+            previous?.cancelAndJoin()
+            if (generation != sessionGeneration.get()) return@launch
             var backoffMs = 1_000L
             var announcedFailure = false
             while (isActive && generation == sessionGeneration.get()) {

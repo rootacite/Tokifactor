@@ -186,6 +186,16 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   tool fields). The encrypted `tokifactor/control` topic carries `probe`, `presence`,
   `status`, and `offline` messages for Aki discovery and must never enter chat
   history or create turns. Keep the plain `text` field as the fallback for older clients.
+- Inline emoji are ordinary text tokens on the wire: agents are taught only
+  `#[name:desc]`, and the raw token stays in history/transcripts. The frontend
+  resolves `name` against the bundled `composeResources/files/emoji/catalog.json`
+  and deliberately tolerates a missing or incorrect `desc`; this fallback is not
+  advertised in prompts. A recognized token splits the source message into separate
+  display items, and the emoji itself renders as a bubble-less transparent message.
+  Unknown names, missing resources, fenced code, and inline code stay literal.
+  The composer has an emoji picker grouped by member that exposes every bundled
+  sticker to the human user; selecting one sends a standalone `#[name:desc]`
+  message through the normal text path.
 - `AgentStatus` is used for both Aki agents and Tokifactor human peers. Its stable
   fields are `memberId` and `memberName`; `agentId`/`agentName` remain read-only
   aliases for old UI and wire paths. `memberKind` is `user` or `agent`; missing values

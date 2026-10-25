@@ -11,6 +11,7 @@ import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.Inject
 import dev.zacsweers.metro.SingleIn
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.Channel
@@ -23,7 +24,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
@@ -43,6 +46,8 @@ class MqttService @Inject constructor(
 
     private val lock = Mutex()
     private var client: Mqtt5AsyncClient? = null
+    // Stale reconnect listeners must not change the state of a newer client.
+    @Volatile private var connectionGeneration = 0L
 
     // Store the maximum packet size negotiated with the broker
     private var maxPacketSize: Int? = null
@@ -56,10 +61,13 @@ class MqttService @Inject constructor(
     suspend fun connect(broker: MqttBroker = settingsStore.mqttBroker): Boolean {
         return lock.withLock {
             disconnectUnlocked()
+            val generation = ++connectionGeneration
             var built: Mqtt5AsyncClient? = null
             try {
                 val clientId = stableClientId(broker)
-                built = buildClient(broker, clientId, autoReconnect = true)
+                built = buildClient(broker, clientId, autoReconnect = true) { live ->
+                    if (generation == connectionGeneration) _connected.value = live
+                }
                 built.publishes(MqttGlobalPublishFilter.ALL) { publish -> dispatch(publish) }
                 val connack = built.connectWith()
                     .cleanStart(false)
@@ -72,20 +80,22 @@ class MqttService @Inject constructor(
                     _connected.value = true
                     true
                 } else {
-                    try {
-                        built.disconnect()
-                    } catch (_: Exception) {
-                    }
+                    disconnectClient(built)
                     _connected.value = false
                     false
                 }
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    built?.let { disconnectClient(it) }
+                    clearConnection(generation)
+                }
+                throw e
             } catch (e: Exception) {
                 e.printStackTrace()
-                try {
-                    built?.disconnect()
-                } catch (_: Exception) {
+                withContext(NonCancellable) {
+                    built?.let { disconnectClient(it) }
+                    clearConnection(generation)
                 }
-                disconnectUnlocked()
                 false
             }
         }
@@ -188,26 +198,43 @@ class MqttService @Inject constructor(
     }.buffer(Channel.UNLIMITED)
 
     suspend fun disconnect() {
-        lock.withLock { disconnectUnlocked() }
+        withContext(NonCancellable) {
+            lock.withLock { disconnectUnlocked() }
+        }
     }
 
     fun isConnected(): Boolean = _connected.value
 
-    private fun disconnectUnlocked() {
+    private suspend fun disconnectUnlocked() {
         val current = client
         client = null
         maxPacketSize = null
+        connectionGeneration++
         _connected.value = false
         synchronized(subscriptionLock) {
             pendingMessages.clear()
         }
-        if (current != null) {
-            try {
-                current.disconnectWith()
-                    .sessionExpiryInterval(SESSION_EXPIRY_SECONDS)
-                    .send()
-            } catch (_: Exception) {
+        if (current != null) disconnectClient(current)
+    }
+
+    private fun clearConnection(generation: Long) {
+        if (generation != connectionGeneration) return
+        client = null
+        maxPacketSize = null
+        _connected.value = false
+    }
+
+    private suspend fun disconnectClient(target: Mqtt5AsyncClient) {
+        try {
+            withContext(NonCancellable) {
+                withTimeoutOrNull(3_000L) {
+                    target.disconnectWith()
+                        .sessionExpiryInterval(SESSION_EXPIRY_SECONDS)
+                        .send()
+                        .await()
+                }
             }
+        } catch (_: Exception) {
         }
     }
 
@@ -254,6 +281,7 @@ class MqttService @Inject constructor(
         broker: MqttBroker,
         clientId: String,
         autoReconnect: Boolean,
+        onConnectionState: ((Boolean) -> Unit)? = null,
     ): Mqtt5AsyncClient {
         var builder = MqttClient.builder()
             .useMqttVersion5()
@@ -270,8 +298,11 @@ class MqttService @Inject constructor(
         }
         if (autoReconnect) {
             builder = builder.automaticReconnectWithDefaultConfig()
-                .addConnectedListener { _connected.value = true }
-                .addDisconnectedListener { _connected.value = false }
+            if (onConnectionState != null) {
+                builder = builder
+                    .addConnectedListener { onConnectionState(true) }
+                    .addDisconnectedListener { onConnectionState(false) }
+            }
         }
         return if (broker.tls) {
             builder.sslWithDefaultConfig().buildAsync()

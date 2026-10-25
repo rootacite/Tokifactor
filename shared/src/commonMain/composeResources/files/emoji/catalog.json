@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "emojis": [
+    {
+      "name": "aki_panic_scream",
+      "file": "emoji/aki/aki_panic_scream.png",
+      "desc": "受到惊吓或事情突然失控时使用；双手护脸、冷汗直流，夸张表达惊慌、崩溃和“完蛋了”。"
+    },
+    {
+      "name": "aki_heart_hands",
+      "file": "emoji/aki/aki_heart_hands.png",
+      "desc": "表达喜欢、撒娇或收到夸奖时使用；双手比心、满脸通红，传达甜到冒泡的爱意。"
+    },
+    {
+      "name": "aki_dizzy_confused",
+      "file": "emoji/aki/aki_dizzy_confused.png",
+      "desc": "遇到绕晕的问题或被连续追问时使用；眼神打转、满头冷汗，表达“脑子转不过来了”。"
+    },
+    {
+      "name": "aki_proud_smile",
+      "file": "emoji/aki/aki_proud_smile.png",
+      "desc": "得意、被夸靠谱或顺利完成安排时使用；闪亮的自信微笑，传达含蓄的骄傲与从容。"
+    },
+    {
+      "name": "aki_cheer_peace",
+      "file": "emoji/aki/aki_cheer_peace.png",
+      "desc": "打招呼、庆祝或气氛轻松时使用；双剪刀手加灿烂笑容，表达元气满满的开心。"
+    },
+    {
+      "name": "aki_worried_what",
+      "file": "emoji/aki/aki_worried_what.png",
+      "desc": "没听懂、觉得不对劲或等待解释时使用；歪头冒问号又有点紧张，表达困惑和迟疑。"
+    },
+    {
+      "name": "aki_teary_sad",
+      "file": "emoji/aki/aki_teary_sad.png",
+      "desc": "委屈、被冷落或想要求安慰时使用；含泪擦眼角，表达强忍难过和楚楚可怜的撒娇。"
+    },
+    {
+      "name": "fuyu_stifled_laugh",
+      "file": "emoji/fuyu/fuyu_stifled_laugh.jpg",
+      "desc": "看到用户翻车却还要强装镇定、或准备补刀前使用；熊猫憋笑到面目扭曲，表达幸灾乐祸和“我受过专业训练”。"
+    },
+    {
+      "name": "fuyu_brain_frog",
+      "file": "emoji/fuyu/fuyu_brain_frog.jpg",
+      "desc": "对方提出离谱方案或自以为很聪明时使用；外露大脑的怪蛙托腮凝视，表达反讽式的“大聪明”与脑回路震惊。"
+    },
+    {
+      "name": "fuyu_cringe_face",
+      "file": "emoji/fuyu/fuyu_cringe_face.jpg",
+      "desc": "看到灾难级代码、借口或自欺欺人时使用；皱眉眯眼一脸不适，表达嫌弃、牙疼和难以直视。"
+    },
+    {
+      "name": "fuyu_roaring_laugh",
+      "file": "emoji/fuyu/fuyu_roaring_laugh.jpg",
+      "desc": "用户搞出荒唐事故或自信发言时使用；黄色团子笑到捂脸，表达毫不掩饰的嘲笑与看戏。"
+    },
+    {
+      "name": "fuyu_deadpan_stare",
+      "file": "emoji/fuyu/fuyu_deadpan_stare.jpg",
+      "desc": "面对“应该没问题”或拙劣借口时使用；粉发少女面无表情半睁眼，表达冷漠审视和“你继续编”。"
+    },
+    {
+      "name": "fuyu_creep_peek",
+      "file": "emoji/fuyu/fuyu_creep_peek.jpg",
+      "desc": "从暗处观察用户踩坑、准备冷不丁补刀时使用；黑影探出诡异人脸，表达阴森偷看和反派式期待。"
+    },
+    {
+      "name": "fuyu_ironic_thumbsup",
+      "file": "emoji/fuyu/fuyu_ironic_thumbsup.jpg",
+      "desc": "用假惺惺的鼓励送用户上事故现场时使用；真诚竖拇指配“你永远是鞍山人”，表达反讽支持和看热闹。"
+    },
+    {
+      "name": "fuyu_speechless",
+      "file": "emoji/fuyu/fuyu_speechless.jpg",
+      "desc": "被用户的逻辑噎住、无话可说时使用；模糊熊猫脸配 emmmmm，表达沉默、无语和正在组织嘲讽。"
+    },
+    {
+      "name": "fuyu_panda_facepalm",
+      "file": "emoji/fuyu/fuyu_panda_facepalm.jpg",
+      "desc": "对低级错误彻底没辙、或故作苦恼时使用；熊猫扶额挠头，表达头疼、无奈和“这也能写出来”。"
+    },
+    {
+      "name": "fuyu_fan_laugh",
+      "file": "emoji/fuyu/fuyu_fan_laugh.jpg",
+      "desc": "对方干了件让人火大又拿他没办法的事时使用；少女掩扇大笑，表面夸“真有你的”，实际是在强压想给你来两下子的冲动。"
+    },
+    {
+      "name": "fuyu_meltdown_panda",
+      "file": "emoji/fuyu/fuyu_meltdown_panda.png",
+      "desc": "被用户的离谱操作或连环事故彻底绕晕时使用；熊猫脸扭曲成漩涡，表达头昏脑胀、精神溢散和“信息量太大”。"
+    },
+    {
+      "name": "fuyu_smile_vein",
+      "file": "emoji/fuyu/fuyu_smile_vein.png",
+      "desc": "表面保持微笑、内里已经想动手时使用；少女眯眼微笑却冒出青筋，表达强压怒火和阴阳怪气的最后通牒。"
+    },
+    {
+      "name": "fuyu_unhinged_stare",
+      "file": "emoji/fuyu/fuyu_unhinged_stare.png",
+      "desc": "对方一意孤行、执意作死时使用；阴影中瞪大双眼咬牙凝视，表达难以置信、彻底破防与即将爆发的怒火。"
+    },
+    {
+      "name": "haru_shock_panic",
+      "file": "emoji/haru/haru_shock_panic.png",
+      "desc": "被突然点名、计划翻车或看到离谱操作时使用；双手举起、冷汗直冒，表达夸张的惊吓与慌乱。"
+    },
+    {
+      "name": "haru_mischief_grin",
+      "file": "emoji/haru/haru_mischief_grin.png",
+      "desc": "想搞恶作剧、偷偷计划或抓到把柄时使用；托腮坏笑，表达古灵精怪的算计和共犯感。"
+    },
+    {
+      "name": "haru_puzzled_what",
+      "file": "emoji/haru/haru_puzzled_what.png",
+      "desc": "没跟上话题、被奇怪要求难住时使用；两侧冒问号，表达茫然、疑惑和“你在说什么”。"
+    },
+    {
+      "name": "haru_tired_sigh",
+      "file": "emoji/haru/haru_tired_sigh.png",
+      "desc": "听到蠢话、被折腾累了或不想配合时使用；扶额半闭眼，表达无语、疲惫和嫌弃。"
+    },
+    {
+      "name": "haru_happy_peace",
+      "file": "emoji/haru/haru_happy_peace.png",
+      "desc": "开心回应、庆祝或鼓励时使用；双剪刀手和大声笑，表达活泼直接的喜悦。"
+    },
+    {
+      "name": "haru_wink_fingergun",
+      "file": "emoji/haru/haru_wink_fingergun.png",
+      "desc": "调皮调侃、得意展示或说“交给我吧”时使用；眨眼比枪带闪光，表达自信又俏皮的嘚瑟。"
+    },
+    {
+      "name": "haru_teary_pout",
+      "file": "emoji/haru/haru_teary_pout.png",
+      "desc": "被欺负、想要哄或撒娇失败时使用；红着眼眶握拳，表达委屈巴巴的抗议与求安慰。"
+    }
+  ]
+}
