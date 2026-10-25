@@ -587,6 +587,18 @@ fun MainPage(
         viewModel.refreshSettings()
     }
 
+    var lastScrolledConversation by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(viewModel.currentConversationId, displayItems.size) {
+        if (lastScrolledConversation == viewModel.currentConversationId) {
+            return@LaunchedEffect
+        }
+        if (displayItems.isNotEmpty()) {
+            listState.scrollToItem(displayItems.lastIndex)
+            lastCount = displayItems.size
+        }
+        lastScrolledConversation = viewModel.currentConversationId
+    }
+
     LaunchedEffect(displayItems.size) {
         val size = displayItems.size
         if (size > 0 && size > lastCount) {
