@@ -92,7 +92,6 @@ import com.acite.tokifactor.model.MEMBER_KIND_USER
 import com.acite.tokifactor.model.approvalBadgeLabel
 import com.acite.tokifactor.model.modelLabel
 import com.acite.tokifactor.model.memberNameKey
-import com.acite.tokifactor.model.SoloState
 import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.queueBadgeLabel
 import com.acite.tokifactor.model.recentMemberMessages
@@ -629,7 +628,6 @@ fun MainPage(
     val listTopPad by animateDpAsState(
         targetValue = when {
             selectionMode -> 68.dp
-            solo.active -> 186.dp
             historicalSolo != null -> 186.dp
             members.isNotEmpty() -> 130.dp
             else -> 16.dp
@@ -830,22 +828,6 @@ fun MainPage(
                     profileTarget = MemberProfileTarget(member = member, isSelf = false)
                 },
                 onOpenConversations = { showConversations = true },
-            )
-        }
-
-        AnimatedVisibility(
-            visible = solo.active && !selectionMode,
-            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
-            exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter),
-        ) {
-            SoloBanner(
-                solo = solo,
-                viewingActive = canWrite,
-                onReturn = {
-                    viewModel.selectConversation("solo:${solo.targetId}")
-                },
-                onEnd = { confirmEndSolo = true },
             )
         }
 
@@ -1237,42 +1219,6 @@ fun MainPage(
         )
     }
 
-}
-
-@Composable
-private fun SoloBanner(
-    solo: SoloState,
-    viewingActive: Boolean,
-    onReturn: () -> Unit,
-    onEnd: () -> Unit,
-) {
-    val colors = tokiColors
-    TokiSurface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .padding(top = 132.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = colors.bgPanel.copy(alpha = 0.92f),
-        borderColor = colors.accentPink.copy(alpha = 0.52f),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = "Solo · ${solo.targetName}",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.text,
-            )
-            if (!viewingActive) {
-                TextButton(onClick = onReturn) { Text("Return") }
-            }
-            TextButton(onClick = onEnd) { Text("End solo") }
-        }
-    }
 }
 
 private enum class MenuAction { File, Photo, Settings }
