@@ -730,7 +730,9 @@ class ChatEngine @Inject constructor(
                                         decodeEnvelopeWithMagic(message.payload)
                                     } ?: return@collect
                                     val (envelope, magic) = decoded
-                                    applyIncomingEnvelope(envelope, message.timestamp)
+                                    withContext(Dispatchers.Main) {
+                                        applyIncomingEnvelope(envelope, message.timestamp)
+                                    }
                                     tagEnvelopeConversation(
                                         envelope,
                                         conversationForMagic(magic),
