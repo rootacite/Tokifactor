@@ -1082,6 +1082,7 @@ class ChatEngine @Inject constructor(
             queueDepth = meta["queueDepth"]?.toIntOrNull() ?: old.queueDepth,
             activeTurn = parseBoolean(meta["activeTurn"]) ?: old.activeTurn,
             waitingUser = parseBoolean(meta["waitingUser"]) ?: old.waitingUser,
+            waitingOther = parseBoolean(meta["waitingOther"]) ?: old.waitingOther,
             pendingApprovals = meta["pendingApprovals"]?.toIntOrNull()
                 ?: old.pendingApprovals,
             uptimeS = meta["uptimeS"]?.toLongOrNull() ?: old.uptimeS,
@@ -1278,6 +1279,7 @@ class ChatEngine @Inject constructor(
             "approval_resolved" -> applyAgentApprovalResolved(normalized, turnId, seq, eventAt)
             "error" -> applyAgentError(normalized, turnId, seq, eventAt)
             "wait_user" -> applyAgentWaitUser(normalized, meta, eventAt)
+            "wait_other" -> applyAgentWaitOther(normalized, meta, eventAt)
         }
     }
 
@@ -1297,6 +1299,26 @@ class ChatEngine @Inject constructor(
             present = true,
             lastSeenAt = maxOf(old?.lastSeenAt ?: 0L, eventAt),
             waitingUser = waiting,
+        )
+        emitMembersChanged()
+    }
+
+    private fun applyAgentWaitOther(
+        envelope: TextEnvelope,
+        metadata: Map<String, String>,
+        eventAt: Long,
+    ) {
+        val memberId = envelope.senderId
+        if (memberId.isBlank() || memberId == settingsStore.memberId) return
+        val waiting = parseBoolean(metadata["waitingOther"]) ?: return
+        val old = memberStates[memberId]
+        memberStates[memberId] = (old ?: AgentStatus(
+            memberId = memberId,
+            memberName = envelope.sender,
+        )).copy(
+            present = true,
+            lastSeenAt = maxOf(old?.lastSeenAt ?: 0L, eventAt),
+            waitingOther = waiting,
         )
         emitMembersChanged()
     }

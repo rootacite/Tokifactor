@@ -70,6 +70,8 @@ data class TextEnvelope(
             "queueDepth",
             "activeTurn",
             "waitingUser",
+            "waitingOther",
+            "waitingOtherTargets",
             "pendingApprovals",
             "uptimeS",
             "memoryTokens",

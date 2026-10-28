@@ -48,7 +48,8 @@ The channel exists for as long as clients stay connected. There is nothing to de
   `Info` and every member avatar open a full member profile. Tokifactor users also
   announce a profile, so humans and agents share the same roster. Without remote
   members, the app stays a normal tokifactor chat client.
-- A member currently in `wait_user` is outlined in blue in the member bar. While any
+- A member currently in `wait_user` is outlined in blue in the member bar; a member
+  waiting in `wait_other` is outlined in orange. While any
   member is waiting, a new user message without `@` is routed only to the waiting
   members; already-working members may still receive it in their active turn.
 - **Solo time:** open an agent profile and choose **Solo time** to switch to that

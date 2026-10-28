@@ -11,6 +11,13 @@ There is **no iOS target** and no backend of our own. Product code lives almost 
 Package: `com.acite.tokifactor`  
 App name / window title: `tokifactor`
 
+## Mandatory safety boundary: no xdotool without explicit permission
+
+Never use `xdotool`, `dotool`, or equivalent desktop window/keyboard/mouse automation tools
+unless the user explicitly permits it. This includes read-only window discovery such as
+`xdotool search`, reading window ids or geometry, and focus/window queries. Stop and ask for
+explicit permission before touching GUI automation; do not use another tool to bypass this rule.
+
 ## Mandatory local deployment
 
 Any change to runtime behavior in Aki or TokiFactor is not complete until the newest build is
@@ -208,7 +215,9 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   normalize to `agent`. `ChatEngine.memberStates` is keyed by immutable `memberId`.
   `waitingUser` is mirrored from control status/presence and from `akid.v1`
   `kind=wait_user` text events; the latter update the member state immediately without
-  entering chat history. Member chips draw a blue outline while it is true.
+  entering chat history. `waitingOther` follows the same path through `kind=wait_other`.
+  Member chips draw a blue outline for `waitingUser` and an orange outline for
+  `waitingOther`; blue takes precedence if both are present.
   The first transport source that announces an id owns its profile; later sources only
   add liveness. Per-source heartbeats prevent one device going offline from removing a
   member still announced by another device. Members time out after 30 seconds without

@@ -13,6 +13,10 @@ class AgentStatusTest {
         assertEquals("Queued · 2", base.copy(queueDepth = 2).statusLabel())
         assertEquals("Waiting for you", base.copy(waitingUser = true).statusLabel())
         assertEquals(
+            "Waiting for another agent",
+            base.copy(waitingOther = true).statusLabel(),
+        )
+        assertEquals(
             "Replying…",
             base.copy(queueDepth = 2, activeTurn = true).statusLabel(),
         )
@@ -108,6 +112,8 @@ class AgentStatusTest {
             "queueDepth" to "2",
             "activeTurn" to "false",
             "waitingUser" to "true",
+            "waitingOther" to "true",
+            "waitingOtherTargets" to "Aki,Fuyu",
             "pendingApprovals" to "1",
             "uptimeS" to "42",
             "memoryTokens" to "7",

@@ -1549,23 +1549,27 @@ private fun MemberChip(
     onShowProfile: () -> Unit,
 ) {
     val colors = tokiColors
-    val waiting = member.waitingUser
+    val waitAccent = when {
+        member.waitingUser -> colors.accentBlue
+        member.waitingOther -> colors.qualityOrange
+        else -> null
+    }
     TokiSurface(
-        modifier = if (waiting) {
+        modifier = if (waitAccent != null) {
             Modifier
-                .border(2.dp, colors.accentBlue.copy(alpha = 0.55f), RoundedCornerShape(50))
+                .border(2.dp, waitAccent.copy(alpha = 0.55f), RoundedCornerShape(50))
                 .padding(2.dp)
         } else {
             Modifier
         },
         shape = RoundedCornerShape(50),
         color = when {
-            waiting -> colors.accentBlue.copy(alpha = 0.12f)
+            waitAccent != null -> waitAccent.copy(alpha = 0.12f)
             selected -> colors.accentPink.copy(alpha = 0.18f)
             else -> Color.White.copy(alpha = 0.045f)
         },
         borderColor = when {
-            waiting -> colors.accentBlue.copy(alpha = 0.88f)
+            waitAccent != null -> waitAccent.copy(alpha = 0.88f)
             selected -> colors.accentPink.copy(alpha = 0.34f)
             else -> colors.stroke.copy(alpha = 0.44f)
         },
