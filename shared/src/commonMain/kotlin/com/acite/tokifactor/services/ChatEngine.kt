@@ -439,8 +439,17 @@ class ChatEngine @Inject constructor(
     override val peerAvatars = mutableStateMapOf<String, ByteArray>()
     private val peerAvatarHash = mutableMapOf<String, String>()
     private val pendingWantAt = mutableMapOf<String, Long>()
-    private val avatarRefreshRequested = ConcurrentHashMap.newKeySet<String>()
+    private val lastServedAvatarWantAt = mutableMapOf<String, Long>()
     private var lastPublishedAvatarHash: String? = null
+    @Volatile private var frontendActive = true
+
+    fun setFrontendActive(active: Boolean) {
+        if (frontendActive == active) return
+        frontendActive = active
+        if (active) {
+            scope.launch(Dispatchers.IO) { requestKnownPeerAvatars() }
+        }
+    }
 
 
 
@@ -577,7 +586,6 @@ class ChatEngine @Inject constructor(
         } else if (connected) {
             scope.launch {
                 publishAkiProbe()
-                publishAvatarHave(force = true)
             }
         }
     }
@@ -640,7 +648,6 @@ class ChatEngine @Inject constructor(
     private fun startMqttSession() {
         val generation = sessionGeneration.incrementAndGet()
         sessionChannelKey = channelKey()
-        avatarRefreshRequested.clear()
         controlReady = false
         stopAkiControlLoop(clearIdentity = true)
         val previous = mqttSessionJob
@@ -795,8 +802,7 @@ class ChatEngine @Inject constructor(
                         }
                 }
                         launch {
-                            publishAvatarHave(force = true)
-                            requestKnownPeerAvatars()
+                            if (frontendActive) requestKnownPeerAvatars()
                         }
                         delay(150)
                         controlReady = true
@@ -1015,6 +1021,7 @@ class ChatEngine @Inject constructor(
             ?: senderId.trim().takeIf(::isMemberId)
             ?: identityRegistry.resolve(memberName).ifBlank { legacyMemberId(memberName) }
         if (memberId.isBlank() || memberId == settingsStore.memberId) return
+        if (envelope.avatarHash.isNotBlank()) notePeerAvatar(memberId, envelope.avatarHash)
         val sourceId = meta["sourceId"].orEmpty().trim()
             .ifBlank { senderId.trim().ifBlank { memberId } }
         val aliases = meta["aliases"].orEmpty()
@@ -1047,7 +1054,6 @@ class ChatEngine @Inject constructor(
                 memberStates.remove(memberId)
                 memberSources.remove(memberId)
                 memberOwners.remove(memberId)
-                avatarRefreshRequested.remove(memberId)
                 if (selectedAgentId == memberId) selectedAgentId = null
             } else {
                 memberStates[memberId]?.let { current ->
@@ -1061,7 +1067,6 @@ class ChatEngine @Inject constructor(
             return
         }
         val now = System.currentTimeMillis()
-        val firstSeen = memberStates[memberId] == null
         val old = memberStates[memberId] ?: AgentStatus(memberId = memberId)
         val owner = memberOwners.getOrPut(memberId) { sourceId }
         memberSources.getOrPut(memberId) { mutableMapOf() }[sourceId] = now
@@ -1100,9 +1105,6 @@ class ChatEngine @Inject constructor(
         }
         if (selectedAgentId != null && memberStates[selectedAgentId]?.present != true) {
             selectedAgentId = null
-        }
-        if (firstSeen) {
-            schedulePeerAvatarRefresh(memberId)
         }
         emitMembersChanged()
     }
@@ -3095,6 +3097,7 @@ class ChatEngine @Inject constructor(
             emitEvent(ChatEngineEvent.PeerAvatarChanged(senderId, null))
         }
         if (peerAvatarHash[senderId] == hash && peerAvatars[senderId] != null) return
+        if (!frontendActive) return
         val now = System.currentTimeMillis()
         val last = pendingWantAt[senderId] ?: 0L
         if (now - last < 8_000L) return
@@ -3105,32 +3108,27 @@ class ChatEngine @Inject constructor(
     }
 
     private suspend fun requestKnownPeerAvatars() {
-        val ids = withContext(Dispatchers.Main.immediate) {
-            buildSet {
-                    messages.mapTo(this) { it.senderId }
-                addAll(peerAvatars.keys)
+        if (!frontendActive || !mqttService.isConnected()) return
+        val wanted = withContext(Dispatchers.Main.immediate) {
+            val ids = buildSet {
+                messages.mapTo(this) { it.senderId }
                 addAll(memberStates.keys)
-            }.filter {
-                    it.isNotEmpty() && it != settingsStore.memberId
+                addAll(peerAvatarHash.keys)
+            }
+            ids.mapNotNull { id ->
+                if (id.isEmpty() || id == settingsStore.memberId) return@mapNotNull null
+                val hash = peerAvatarHash[id]?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                if (peerAvatars[id] != null && peerAvatarHash[id] == hash) return@mapNotNull null
+                id to hash
             }
         }
-        for (id in ids) {
-            avatarRefreshRequested.add(id)
-            val hash = withContext(Dispatchers.Main.immediate) { peerAvatarHash[id] ?: "" }
+        for ((id, hash) in wanted) {
             publishAvatarWant(id, hash)
         }
     }
 
-    private fun schedulePeerAvatarRefresh(memberId: String) {
-        if (memberId.isEmpty() || memberId == settingsStore.memberId) return
-        if (!avatarRefreshRequested.add(memberId)) return
-        val hash = peerAvatarHash[memberId] ?: ""
-        scope.launch(Dispatchers.IO) {
-            publishAvatarWant(memberId, hash)
-        }
-    }
-
     private suspend fun publishAvatarWant(senderId: String, hash: String) {
+        if (!frontendActive || hash.isBlank()) return
         try {
             mqttService.publish(
                 "tokifactor/avatar",
@@ -3171,7 +3169,11 @@ class ChatEngine @Inject constructor(
         when (envelope.type) {
             AvatarEnvelope.WANT -> {
                 if (envelope.id == ownKey) {
-                    publishAvatarHave(force = true)
+                    val now = System.currentTimeMillis()
+                    if (now - (lastServedAvatarWantAt[ownKey] ?: 0L) >= 2_000L) {
+                        lastServedAvatarWantAt[ownKey] = now
+                        publishAvatarHave(force = true)
+                    }
                 }
             }
             AvatarEnvelope.HAVE -> {

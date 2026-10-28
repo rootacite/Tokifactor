@@ -39,7 +39,7 @@ class DaemonStateHub(
     }
 
     override suspend fun attach(): AttachedClient = withContext(Dispatchers.Main.immediate) {
-        synchronized(lock) {
+        val (attached, first) = synchronized(lock) {
             val sink = ClientSink()
             clients += sink
             val snapshot = DaemonServerFrame(
@@ -47,15 +47,22 @@ class DaemonStateHub(
                 revision = revision,
                 snapshot = engine.snapshot(),
             )
-            AttachedClient(
+            val client = AttachedClient(
                 line = DaemonJson.encodeToString(DaemonServerFrame.serializer(), snapshot),
                 sink = sink,
             )
+            client to (clients.size == 1)
         }
+        if (first) engine.setFrontendActive(true)
+        attached
     }
 
     override fun detach(client: AttachedClient) {
-        synchronized(lock) { clients -= client.sink }
+        val last = synchronized(lock) {
+            clients -= client.sink
+            clients.isEmpty()
+        }
+        if (last) engine.setFrontendActive(false)
         client.sink.close()
     }
 

@@ -16,6 +16,7 @@ object TokiFactorDaemon {
     fun run() {
         val graph = createGraph<DaemonGraph>()
         val engine = graph.chatEngine
+        engine.setFrontendActive(false)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val notifier = LinuxNotifier(scope) { senderId ->
             withContext(Dispatchers.Main.immediate) {
