@@ -28,6 +28,7 @@ import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.model.PictureChunk
 import com.acite.tokifactor.model.TextChunk
 import com.acite.tokifactor.model.TextEnvelope
+import com.acite.tokifactor.model.mergeToolCallContent
 import com.acite.tokifactor.model.WireJson
 import com.acite.tokifactor.model.selectedMember
 import com.acite.tokifactor.model.shouldExpireAki
@@ -1536,10 +1537,17 @@ class ChatEngine @Inject constructor(
         val toolCallId = envelope.metadata["toolCallId"].orEmpty()
         if (toolCallId.isEmpty()) return
         val status = envelope.metadata["toolStatus"].orEmpty().ifBlank { "running" }
+        val id = "$turnId:tool:$toolCallId"
+        val previous = messages.firstOrNull { it.id == id }
+        val content = if (previous != null) {
+            mergeToolCallContent(previous.content, envelope.text, status)
+        } else {
+            envelope.text
+        }
         upsertAgent(
             ChatMessage(
-                id = "$turnId:tool:$toolCallId",
-                content = envelope.text,
+                id = id,
+                content = content,
                 pic = null,
                 sender = envelope.sender,
                 senderId = envelope.senderId,

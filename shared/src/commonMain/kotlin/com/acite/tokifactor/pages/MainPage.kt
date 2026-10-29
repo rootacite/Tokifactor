@@ -68,9 +68,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -85,6 +90,12 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.acite.tokifactor.model.ChatMessage
+import com.acite.tokifactor.model.ToolGroupTone
+import com.acite.tokifactor.model.parseToolCallDetail
+import com.acite.tokifactor.model.toolCallCounts
+import com.acite.tokifactor.model.toolCallStatusLabel
+import com.acite.tokifactor.model.toolGroupSummary
+import com.acite.tokifactor.model.toolGroupTone
 import com.acite.tokifactor.model.ChatAttachment
 import com.acite.tokifactor.model.FileChunk
 import com.acite.tokifactor.model.AgentStatus
@@ -2311,6 +2322,7 @@ private fun AgentToolCard(
     onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
+    var showDetail by remember { mutableStateOf(false) }
     ChatRow(
         isMine = false,
         sender = message.sender,
@@ -2332,8 +2344,19 @@ private fun AgentToolCard(
                 colors.stroke.copy(alpha = 0.48f)
             },
         ) {
-            AgentToolRow(message = message, modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp))
+            AgentToolRow(
+                message = message,
+                onErrorSurface = message.status == "error",
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                onClick = { showDetail = true },
+            )
         }
+    }
+    if (showDetail) {
+        ToolCallDetailDialog(
+            message = message,
+            onDismiss = { showDetail = false },
+        )
     }
 }
 
@@ -2357,17 +2380,25 @@ private fun AgentToolGroupCard(
         if (requiresAction) onExpandedChange(true)
     }
     val effectiveExpanded = expanded || requiresAction
-    val anyRunning = toolMessages.any { it.status == "running" }
-    val anyError = messages.any {
-        it.status == "error" || (it.agentKind == "approval" && it.status == "timeout")
-    }
+    val counts = toolCallCounts(toolMessages)
     val names = toolMessages.map { it.toolName.ifBlank { "Tool" } }.distinct()
-    val summary = buildList {
-        addAll(names)
-        if (approvalMessages.isNotEmpty()) {
-            add(if (approvalMessages.size == 1) "approval" else "${approvalMessages.size} approvals")
+    val summary = toolGroupSummary(
+        toolNames = names,
+        counts = counts,
+        approvalCount = approvalMessages.size,
+        requiresAction = requiresAction,
+    )
+    val subtitle = buildAnnotatedString {
+        if (!summary.hasFailedSpan) {
+            append(summary.text)
+        } else {
+            append(summary.text.substring(0, summary.failedStart))
+            withStyle(SpanStyle(color = colors.error)) {
+                append(summary.text.substring(summary.failedStart, summary.failedEnd))
+            }
+            append(summary.text.substring(summary.failedEnd))
         }
-    }.joinToString(" · ")
+    }
     val title = buildList {
         if (toolMessages.isNotEmpty()) {
             add("${toolMessages.size} tool call${if (toolMessages.size == 1) "" else "s"}")
@@ -2376,27 +2407,18 @@ private fun AgentToolGroupCard(
             add("${approvalMessages.size} approval${if (approvalMessages.size == 1) "" else "s"}")
         }
     }.joinToString(" · ")
-    val groupStatus = when {
-        requiresAction -> "Approval needed"
-        anyRunning -> "Running"
-        anyError -> "Failed"
-        else -> "Completed"
+    val tone = toolGroupTone(requiresAction)
+    val containerColor = when (tone) {
+        ToolGroupTone.Approval -> colors.accentBlue.copy(alpha = 0.15f)
+        ToolGroupTone.Normal -> colors.bgCard.copy(alpha = 0.72f)
     }
-    val containerColor = when {
-        requiresAction -> colors.accentBlue.copy(alpha = 0.15f)
-        anyError -> colors.errorContainer.copy(alpha = 0.84f)
-        else -> colors.bgCard.copy(alpha = 0.72f)
+    val contentColor = colors.text
+    val borderColor = when (tone) {
+        ToolGroupTone.Approval -> colors.accentBlue.copy(alpha = 0.34f)
+        ToolGroupTone.Normal -> colors.stroke.copy(alpha = 0.48f)
     }
-    val contentColor = when {
-        requiresAction -> colors.text
-        anyError -> colors.onErrorContainer
-        else -> colors.text
-    }
-    val borderColor = when {
-        requiresAction -> colors.accentBlue.copy(alpha = 0.34f)
-        anyError -> colors.error.copy(alpha = 0.42f)
-        else -> colors.stroke.copy(alpha = 0.48f)
-    }
+    var detailId by remember { mutableStateOf<String?>(null) }
+    val detailMessage = detailId?.let { id -> messages.firstOrNull { it.id == id } }
     ChatRow(
         isMine = false,
         sender = messages.first().sender,
@@ -2425,11 +2447,7 @@ private fun AgentToolGroupCard(
                         imageVector = Icons.Default.Build,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
-                        tint = if (anyError) {
-                            colors.onErrorContainer
-                        } else {
-                            colors.textDim
-                        },
+                        tint = colors.textDim,
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -2437,13 +2455,15 @@ private fun AgentToolGroupCard(
                             style = MaterialTheme.typography.labelLarge,
                             color = contentColor,
                         )
-                        Text(
-                            text = "$summary · $groupStatus",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = contentColor.copy(alpha = 0.72f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        if (subtitle.text.isNotEmpty()) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = contentColor.copy(alpha = 0.72f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                     if (requiresAction) {
                         Text(
@@ -2451,19 +2471,12 @@ private fun AgentToolGroupCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = contentColor.copy(alpha = 0.8f),
                         )
-                    } else if (anyRunning) {
+                    } else if (counts.running > 0) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
                         )
-                    } else if (anyError) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = colors.onErrorContainer,
-                        )
-                    } else {
+                    } else if (counts.failed == 0) {
                         Icon(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
@@ -2518,6 +2531,7 @@ private fun AgentToolGroupCard(
                                 AgentToolRow(
                                     message = message,
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    onClick = { detailId = message.id },
                                 )
                             }
                         }
@@ -2526,24 +2540,31 @@ private fun AgentToolGroupCard(
             }
         }
     }
+    if (detailMessage != null) {
+        ToolCallDetailDialog(
+            message = detailMessage,
+            onDismiss = { detailId = null },
+        )
+    }
 }
 
 @Composable
 private fun AgentToolRow(
     message: ChatMessage,
     modifier: Modifier = Modifier,
+    onErrorSurface: Boolean = false,
+    onClick: () -> Unit,
 ) {
     val colors = tokiColors
     val status = message.status
-    val label = when (status) {
-        "running" -> "Running"
-        "success" -> "Completed"
-        "error" -> "Failed"
-        "complete" -> "Completed"
-        else -> status.replaceFirstChar { it.uppercase() }
-    }
+    val label = toolCallStatusLabel(status)
+    val errorTint = if (onErrorSurface) colors.onErrorContainer else colors.error
     Row(
-        modifier = modifier,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Tool call details" }
+            .then(modifier),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -2551,17 +2572,13 @@ private fun AgentToolRow(
             imageVector = Icons.Default.Build,
             contentDescription = null,
             modifier = Modifier.size(16.dp),
-            tint = if (status == "error") {
-                colors.onErrorContainer
-            } else {
-                colors.textDim
-            },
+            tint = if (status == "error") errorTint else colors.textDim,
         )
         Column(modifier = Modifier.weight(1f, fill = false)) {
             Text(
                 text = message.toolName.ifBlank { "Tool" },
                 style = MaterialTheme.typography.labelLarge,
-                color = if (status == "error") colors.onErrorContainer else colors.text,
+                color = if (status == "error") errorTint else colors.text,
             )
             Text(
                 text = label,
@@ -2578,7 +2595,7 @@ private fun AgentToolRow(
                 imageVector = Icons.Default.Close,
                 contentDescription = null,
                 modifier = Modifier.size(17.dp),
-                tint = colors.onErrorContainer,
+                tint = errorTint,
             )
             else -> Icon(
                 imageVector = Icons.Default.Check,
@@ -2586,6 +2603,149 @@ private fun AgentToolRow(
                 modifier = Modifier.size(17.dp),
                 tint = colors.textDim,
             )
+        }
+    }
+}
+
+@Composable
+private fun ToolCallDetailDialog(
+    message: ChatMessage,
+    onDismiss: () -> Unit,
+) {
+    val colors = tokiColors
+    val detail = parseToolCallDetail(message.content)
+    val finished = message.status == "success" ||
+        message.status == "error" ||
+        message.status == "complete"
+    val maxHeight = with(LocalDensity.current) {
+        LocalWindowInfo.current.containerSize.height.toDp() * 0.8f
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        TokiSurface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxHeight)
+                .padding(horizontal = 16.dp, vertical = 24.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = colors.bgPanel.copy(alpha = 0.98f),
+            borderColor = colors.stroke.copy(alpha = 0.72f),
+        ) {
+            Column(modifier = Modifier.heightIn(max = maxHeight)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = message.toolName.ifBlank { "Tool" },
+                            style = MaterialTheme.typography.titleMedium,
+                            color = colors.text,
+                        )
+                        Text(
+                            text = toolCallStatusLabel(message.status),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (message.status == "error") colors.error else colors.textDim,
+                        )
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = colors.textDim,
+                        )
+                    }
+                }
+                HorizontalDivider(color = colors.stroke.copy(alpha = 0.55f))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    if (detail == null) {
+                        Text(
+                            text = "This call was recorded before arguments and results were kept.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.textDim,
+                        )
+                    } else {
+                        ToolCallDetailSection(
+                            title = "Arguments",
+                            text = detail.arguments.ifBlank { "No arguments" },
+                            copyText = detail.arguments,
+                        )
+                        when {
+                            !finished && (message.status == "running" || message.status.isBlank()) -> {
+                                ToolCallDetailSection(
+                                    title = "Result",
+                                    text = "Still running",
+                                    copyText = "",
+                                )
+                            }
+                            message.status == "error" -> {
+                                val result = detail.result.orEmpty()
+                                ToolCallDetailSection(
+                                    title = "Error",
+                                    text = result.ifBlank { "No output" },
+                                    copyText = result,
+                                )
+                            }
+                            else -> {
+                                val result = detail.result.orEmpty()
+                                ToolCallDetailSection(
+                                    title = "Result",
+                                    text = result.ifBlank { "No output" },
+                                    copyText = result,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolCallDetailSection(
+    title: String,
+    text: String,
+    copyText: String,
+) {
+    val colors = tokiColors
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.text,
+                modifier = Modifier.weight(1f),
+            )
+            CopyIconButton(text = copyText, tint = colors.textDim)
+        }
+        TokiSurface(
+            shape = RoundedCornerShape(12.dp),
+            color = colors.bgApp.copy(alpha = 0.58f),
+            borderColor = colors.stroke.copy(alpha = 0.42f),
+        ) {
+            SelectionContainer {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = colors.text,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                )
+            }
         }
     }
 }
