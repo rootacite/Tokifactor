@@ -102,6 +102,9 @@ private val exactDisplayNames = mapOf(
     "camera_take_photo" to "Take a camera photo",
     "desktop_take_screenshot" to "Take a desktop screenshot",
     "generate_image" to "Generate image",
+    "comfyui_startup" to "Start ComfyUI",
+    "comfyui_generate" to "Generate image with ComfyUI",
+    "comfyui_end" to "Stop ComfyUI",
     "acquire_execution_lock" to "Acquire execution lock",
     "release_execution_lock" to "Release execution lock",
     "wait_other" to "Wait for earlier agents",
@@ -147,6 +150,7 @@ private val tokenWords = mapOf(
     "id" to "ID",
     "ai" to "AI",
     "llm" to "LLM",
+    "comfyui" to "ComfyUI",
 )
 
 private fun mcpDisplayName(rest: String): String {

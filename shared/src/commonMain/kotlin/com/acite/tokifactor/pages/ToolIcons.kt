@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Category
@@ -55,9 +56,11 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Pending
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Policy
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.PostAdd
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QuestionAnswer
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.RateReview
@@ -77,14 +80,23 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import com.acite.tokifactor.model.toolDisplayName
 import com.acite.tokifactor.model.toolIconLookupKey
 
-fun toolIcon(rawName: String): ImageVector =
-    toolIcons[toolIconLookupKey(rawName)] ?: Icons.Filled.Extension
+fun toolIcon(rawName: String): ImageVector {
+    val key = toolIconLookupKey(rawName)
+    return toolIcons[key]
+        ?: if (key.startsWith("comfyui_")) Icons.Filled.Brush else Icons.Filled.Extension
+}
 
 fun toolGroupIcon(rawNames: List<String>): ImageVector {
     val named = rawNames.filter { it.isNotBlank() }
     if (named.isEmpty()) return Icons.Filled.Widgets
     val labels = named.map { toolDisplayName(it) }.distinct()
-    return if (labels.size == 1) toolIcon(named.first()) else Icons.Filled.Widgets
+    if (labels.size == 1) return toolIcon(named.first())
+    val keys = named.map(::toolIconLookupKey)
+    return if (keys.all { it.startsWith("comfyui_") }) {
+        Icons.Filled.Brush
+    } else {
+        Icons.Filled.Widgets
+    }
 }
 
 private val toolIcons: Map<String, ImageVector> = buildMap {
@@ -98,6 +110,9 @@ private val toolIcons: Map<String, ImageVector> = buildMap {
     icon(Icons.Filled.Difference, "applypatch")
     icon(Icons.Filled.Image, "viewimage", "tokifactor_send_image")
     icon(Icons.Filled.AutoAwesome, "generate_image", "skill")
+    icon(Icons.Filled.PlayArrow, "comfyui_startup")
+    icon(Icons.Filled.Brush, "comfyui_generate")
+    icon(Icons.Filled.PowerSettingsNew, "comfyui_end")
     icon(
         Icons.Filled.Terminal,
         "bash",

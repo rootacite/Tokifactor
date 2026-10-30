@@ -39,6 +39,10 @@ class ToolDisplayTest {
         assertEquals("Working Directory", toolDisplayName("SetWorkingDirectory"))
         assertEquals("Send tokifactor image", toolDisplayName("tokifactor_send_image"))
         assertEquals("Take a desktop screenshot", toolDisplayName("desktop_take_screenshot"))
+        assertEquals("Start ComfyUI", toolDisplayName("comfyui_startup"))
+        assertEquals("Generate image with ComfyUI", toolDisplayName("comfyui_generate"))
+        assertEquals("Stop ComfyUI", toolDisplayName("comfyui_end"))
+        assertEquals("ComfyUI Status", toolDisplayName("comfyui_status"))
         assertEquals("Create schedule", toolDisplayName("aki_schedule_create"))
         assertEquals("List schedules", toolDisplayName("aki_schedule_list"))
         assertEquals(
