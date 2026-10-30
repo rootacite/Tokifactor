@@ -479,6 +479,7 @@ class ChatEngine @Inject constructor(
         var sentAt: Long = 0L
         var timer: Job? = null
         var expectText: Boolean = false
+        var conversationId: String? = null
     }
 
     private val incomingImageGroups = mutableMapOf<String, IncomingImageGroup>()
@@ -1377,12 +1378,14 @@ class ChatEngine @Inject constructor(
         senderId: String,
         sentAt: Long,
         expectText: Boolean = false,
+        conversationId: String = GROUP_CONVERSATION,
     ) {
         val group = incomingImageGroups.getOrPut(messageId) {
             IncomingImageGroup(expected.coerceIn(1, 4))
         }
         group.expected = maxOf(group.expected, expected.coerceIn(1, 4))
         group.expectText = group.expectText || expectText
+        group.conversationId = conversationId
         group.attachments[index.coerceIn(0, 3)] = attachment
         group.sender = sender
         group.senderId = senderId
@@ -1418,14 +1421,13 @@ class ChatEngine @Inject constructor(
         incomingImageGroups.remove(messageId)
         val attachments = group.attachments.toSortedMap().values.toList()
         val envelope = group.envelope
+        val conversationId = group.conversationId
+            ?: conversationForIncomingSender(
+                resolveIncomingMemberId(group.sender, group.senderId, group.metadata)
+            )
         if (envelope != null) {
             applyIncomingEnvelope(envelope, group.eventAt, attachments, false)
-            tagEnvelopeConversation(
-                envelope,
-                conversationForIncomingSender(
-                    resolveIncomingMemberId(group.sender, group.senderId, group.metadata)
-                ),
-            )
+            tagEnvelopeConversation(envelope, conversationId)
             return
         }
         if (attachments.isEmpty()) return
@@ -1435,9 +1437,7 @@ class ChatEngine @Inject constructor(
             id = id,
             content = "",
             pic = null,
-            conversationId = conversationForIncomingSender(
-                resolveIncomingMemberId(group.sender, group.senderId, group.metadata)
-            ),
+            conversationId = conversationId,
             sender = group.sender,
             senderId = resolveIncomingMemberId(group.sender, group.senderId, group.metadata),
             isMine = isOwnMember(group.senderId),
@@ -2601,13 +2601,20 @@ class ChatEngine @Inject constructor(
 
     private fun decryptPictureCaption(encrypted: String): String {
         if (encrypted.isBlank()) return ""
-        return try {
-            SecureMessageChannel.decrypt(Base64.decode(encrypted), settingsStore.magicString)
-                .decodeToString(throwOnInvalidSequence = false)
-                .take(2000)
+        val cipher = try {
+            Base64.decode(encrypted)
         } catch (_: Exception) {
-            ""
+            return ""
         }
+        for (magic in activeMagicCandidates()) {
+            try {
+                return SecureMessageChannel.decrypt(cipher, magic)
+                    .decodeToString(throwOnInvalidSequence = false)
+                    .take(2000)
+            } catch (_: Exception) {
+            }
+        }
+        return ""
     }
 
     private suspend fun handleIncomingFile(chunk: FileChunk, receivedAt: Long) {
@@ -2754,6 +2761,7 @@ class ChatEngine @Inject constructor(
                     isChunkedText = isChunkedText,
                     sentAt = messageAt,
                     caption = caption,
+                    conversationId = transferConversation,
                 )
             }
         }
@@ -2858,6 +2866,7 @@ class ChatEngine @Inject constructor(
                         senderId = memberId,
                         sentAt = messageAt,
                         expectText = textCommit,
+                        conversationId = transferConversation,
                     )
                 }
                 completedTransfers.add(transferId)
@@ -2877,6 +2886,7 @@ class ChatEngine @Inject constructor(
                         fileSize = size,
                         chunksReceived = 0,
                         chunksTotal = 0,
+                        conversationId = transferConversation,
                         isMine = isOwnMember(memberId),
                     )
                 }
@@ -2902,6 +2912,7 @@ class ChatEngine @Inject constructor(
         isChunkedText: Boolean,
         sentAt: Long,
         caption: String,
+        conversationId: String,
     ): Boolean {
         if (transferId in abortedTransfers) return false
         val existingMsg = messages.indexOfFirst { it.id == transferId }
@@ -2963,6 +2974,7 @@ class ChatEngine @Inject constructor(
                     fileSize = state.fileSize,
                     isChunkedText = state.isChunkedText,
                     sentAt = state.sentAt,
+                    conversationId = conversationId,
                 )
             )
         } else {
@@ -2972,6 +2984,7 @@ class ChatEngine @Inject constructor(
                 chunksReceived = state.count,
                 chunksTotal = total,
                 fileSize = state.fileSize,
+                conversationId = conversationId,
             )
             emitEvent(ChatEngineEvent.MessageUpsert(messages[existingMsg]))
         }
