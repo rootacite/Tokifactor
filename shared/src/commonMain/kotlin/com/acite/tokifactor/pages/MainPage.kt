@@ -20,6 +20,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -34,7 +39,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -94,6 +98,7 @@ import com.acite.tokifactor.model.ToolGroupTone
 import com.acite.tokifactor.model.parseToolCallDetail
 import com.acite.tokifactor.model.toolCallCounts
 import com.acite.tokifactor.model.toolCallStatusLabel
+import com.acite.tokifactor.model.toolDisplayName
 import com.acite.tokifactor.model.toolGroupSummary
 import com.acite.tokifactor.model.toolGroupTone
 import com.acite.tokifactor.model.ChatAttachment
@@ -544,10 +549,33 @@ fun MainPage(
     var showEmojiPicker by remember { mutableStateOf(false) }
     val colors = tokiColors
     val listState = rememberLazyListState()
+    val stickToBottom = remember { mutableStateOf(true) }
+    val autoScrolling = remember { mutableStateOf(false) }
+    val followBottomScroll = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                if (source.adjustsBottomStick(autoScrolling.value)) {
+                    stickToBottom.value = listState.isAtEnd()
+                }
+                return Offset.Zero
+            }
+        }
+    }
+    suspend fun revealBottomWhileFollowing() {
+        autoScrolling.value = true
+        try {
+            listState.revealBottom()
+        } finally {
+            autoScrolling.value = false
+        }
+    }
     var selectionMode by remember { mutableStateOf(false) }
     val selectedIds = remember { mutableStateListOf<String>() }
     var confirmDelete by remember { mutableStateOf(false) }
-    var lastCount by remember { mutableIntStateOf(-1) }
     var profileTarget by remember { mutableStateOf<MemberProfileTarget?>(null) }
     var showConversations by remember { mutableStateOf(false) }
     var confirmEndSolo by remember { mutableStateOf(false) }
@@ -730,46 +758,22 @@ fun MainPage(
         partialFragments.clear()
     }
 
-    var lastScrolledConversation by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(viewModel.currentConversationId, displayItems.size) {
-        if (lastScrolledConversation == viewModel.currentConversationId) {
-            return@LaunchedEffect
-        }
+    val followToken = remember { mutableStateOf(0 to 0) }
+    followToken.value = displayFeedKey(displayItems) to displayItems.size
+
+    LaunchedEffect(viewModel.currentConversationId) {
+        stickToBottom.value = true
         if (displayItems.isNotEmpty()) {
-            listState.scrollToItem(displayItems.lastIndex)
-            lastCount = displayItems.size
+            revealBottomWhileFollowing()
         }
-        lastScrolledConversation = viewModel.currentConversationId
     }
 
-    LaunchedEffect(displayItems.size) {
-        val size = displayItems.size
-        if (size > 0 && size > lastCount) {
-            if (lastCount <= 0) {
-                listState.scrollToItem(size - 1)
-            } else if (!listState.isScrollInProgress &&
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
-                    ?.let { it >= size - 2 } == true
-            ) {
-                listState.animateScrollToItem(size - 1)
+    LaunchedEffect(listState) {
+        snapshotFlow { followToken.value }
+            .collectLatest { (_, count) ->
+                if (!stickToBottom.value || count == 0) return@collectLatest
+                revealBottomWhileFollowing()
             }
-        }
-        lastCount = size
-    }
-
-    val latestMessage = viewModel.messages.lastOrNull()
-    LaunchedEffect(
-        latestMessage?.id,
-        latestMessage?.content,
-        latestMessage?.status,
-        latestMessage?.seq,
-    ) {
-        val size = displayItems.size
-        if (size == 0) return@LaunchedEffect
-        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        if (!listState.isScrollInProgress && lastVisible >= size - 3) {
-            listState.animateScrollToItem(size - 1)
-        }
     }
 
     OnSystemBack(enabled = selectionMode || profileTarget != null) {
@@ -799,6 +803,7 @@ fun MainPage(
         LazyColumn(
             state = listState,
             modifier = Modifier
+                .nestedScroll(followBottomScroll)
                 .fillMaxSize()
                 .padding(bottom = 80.dp),
             contentPadding = PaddingValues(
@@ -2199,11 +2204,13 @@ private fun SelectionMark(
     }
 }
 
+private const val MESSAGE_LONG_PRESS_TIMEOUT_MS = 3_000L
+
 private fun Modifier.detectMessageLongPress(onLongPress: () -> Unit): Modifier =
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-            val timeout = viewConfiguration.longPressTimeoutMillis
+            val timeout = MESSAGE_LONG_PRESS_TIMEOUT_MS
             val slop = viewConfiguration.touchSlop
             val pointerId = down.id
             val timedOut = withTimeoutOrNull(timeout) {
@@ -2381,7 +2388,7 @@ private fun AgentToolGroupCard(
     }
     val effectiveExpanded = expanded || requiresAction
     val counts = toolCallCounts(toolMessages)
-    val names = toolMessages.map { it.toolName.ifBlank { "Tool" } }.distinct()
+    val names = toolMessages.map { toolDisplayName(it.toolName) }.distinct()
     val summary = toolGroupSummary(
         toolNames = names,
         counts = counts,
@@ -2444,7 +2451,7 @@ private fun AgentToolGroupCard(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Build,
+                        imageVector = toolGroupIcon(messages.map { it.toolName }),
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                         tint = colors.textDim,
@@ -2569,14 +2576,14 @@ private fun AgentToolRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Icon(
-            imageVector = Icons.Default.Build,
+            imageVector = toolIcon(message.toolName),
             contentDescription = null,
             modifier = Modifier.size(16.dp),
             tint = if (status == "error") errorTint else colors.textDim,
         )
         Column(modifier = Modifier.weight(1f, fill = false)) {
             Text(
-                text = message.toolName.ifBlank { "Tool" },
+                text = toolDisplayName(message.toolName),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (status == "error") errorTint else colors.text,
             )
@@ -2639,10 +2646,17 @@ private fun ToolCallDetailDialog(
                         .fillMaxWidth()
                         .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    Icon(
+                        imageVector = toolIcon(message.toolName),
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = colors.textDim,
+                    )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = message.toolName.ifBlank { "Tool" },
+                            text = toolDisplayName(message.toolName),
                             style = MaterialTheme.typography.titleMedium,
                             color = colors.text,
                         )
@@ -2815,12 +2829,12 @@ private fun AgentApprovalContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Icon(
-                imageVector = Icons.Default.Build,
+                imageVector = toolIcon(message.toolName),
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
             )
             Text(
-                text = "Tool approval · ${message.toolName.ifBlank { "Tool" }}",
+                text = "Tool approval · ${toolDisplayName(message.toolName)}",
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.weight(1f),
             )
