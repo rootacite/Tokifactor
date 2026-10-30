@@ -1,6 +1,7 @@
 package com.acite.tokifactor.pages
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import com.acite.tokifactor.model.ChatMessage
 
@@ -42,16 +43,29 @@ internal fun LazyListState.isAtEnd(slackPx: Int = LIST_BOTTOM_SLACK_PX): Boolean
 }
 
 internal suspend fun LazyListState.revealBottom() {
-    val lastIndex = layoutInfo.totalItemsCount - 1
-    if (lastIndex < 0) return
-    scrollToItem(lastIndex)
-    val info = layoutInfo
-    val last = info.visibleItemsInfo.lastOrNull() ?: return
-    if (last.index != lastIndex) return
-    val targetEnd = info.viewportEndOffset - info.afterContentPadding
-    val remainder = last.offset + last.size - targetEnd
-    if (remainder > 1) {
-        scroll { scrollBy(remainder.toFloat()) }
+    if (layoutInfo.totalItemsCount <= 0) return
+    // A split agent message adds several rows in one frame. Their heights are
+    // still unknown on the first scroll, so one scrollToItem stops on the first
+    // new row. Measure, then scroll again until the tail is actually in view.
+    repeat(5) {
+        val count = layoutInfo.totalItemsCount
+        if (count <= 0) return
+        val lastIndex = count - 1
+        scrollToItem(lastIndex)
+        val info = layoutInfo
+        val last = info.visibleItemsInfo.lastOrNull()
+        if (last != null && last.index == lastIndex) {
+            val targetEnd = info.viewportEndOffset - info.afterContentPadding
+            val remainder = last.offset + last.size - targetEnd
+            if (remainder > 1) {
+                scroll { scrollBy(remainder.toFloat()) }
+            }
+        } else {
+            val viewport = (info.viewportEndOffset - info.viewportStartOffset).coerceAtLeast(1)
+            scroll { scrollBy(viewport.toFloat()) }
+        }
+        withFrameNanos { }
+        if (isAtEnd() && layoutInfo.totalItemsCount == count) return
     }
 }
 

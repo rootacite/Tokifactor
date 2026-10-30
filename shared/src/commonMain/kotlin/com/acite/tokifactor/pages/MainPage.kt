@@ -533,6 +533,25 @@ internal fun buildChatDisplayItems(
 private fun ChatMessage.isGroupableToolStep(): Boolean =
     isAgent && (agentKind == "tool" || agentKind == "approval")
 
+/**
+ * Tool groups that already have a later non-tool row. Staged drafts do not
+ * count: the chain is only broken by a real message.
+ */
+internal fun interruptedToolGroupIds(items: List<ChatDisplayItem>): Set<String> {
+    val interrupted = mutableSetOf<String>()
+    for (index in items.indices) {
+        val group = items[index] as? ChatDisplayItem.ToolGroup ?: continue
+        val broken = items.subList(index + 1, items.size).any { later ->
+            when (later) {
+                is ChatDisplayItem.ToolGroup -> false
+                is ChatDisplayItem.MessageItem -> !later.staged
+            }
+        }
+        if (broken) interrupted += group.id
+    }
+    return interrupted
+}
+
 internal fun approvalRequesterMatches(requesterId: String, localMemberId: String): Boolean =
     requesterId.isEmpty() || requesterId == localMemberId
 
@@ -748,6 +767,14 @@ fun MainPage(
         }
     }
     val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
+    val interruptedToolGroups = interruptedToolGroupIds(displayItems)
+    var collapsedInterruptions by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(interruptedToolGroups) {
+        for (id in interruptedToolGroups - collapsedInterruptions) {
+            expandedToolGroups[id] = false
+        }
+        collapsedInterruptions = interruptedToolGroups
+    }
 
     LaunchedEffect(Unit) {
         viewModel.refreshSettings()

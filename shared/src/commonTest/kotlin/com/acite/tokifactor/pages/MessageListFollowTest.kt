@@ -2,6 +2,7 @@ package com.acite.tokifactor.pages
 
 import com.acite.tokifactor.model.ChatMessage
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -87,6 +88,41 @@ class MessageListFollowTest {
         assertNotEquals(keyOf(user, running), keyOf(user, finished))
         assertNotEquals(keyOf(user, running), keyOf(user, running, finished.copy(id = "tool-2")))
     }
+
+    @Test
+    fun nonToolMessageCollapsesOnlyTheBrokenToolChain() {
+        val firstChain = listOf(tool("read", "turn-a"), tool("grep", "turn-a"))
+        val secondChain = listOf(tool("bash", "turn-b"), tool("write", "turn-b"))
+        val reply = message("reply", "Done.", agentKind = "turn", phase = "final")
+        val openChain = buildChatDisplayItems(firstChain, EmojiCatalog.EMPTY)
+        assertEquals(emptySet(), interruptedToolGroupIds(openChain))
+
+        val broken = buildChatDisplayItems(firstChain + reply, EmojiCatalog.EMPTY)
+        assertEquals(setOf("read"), interruptedToolGroupIds(broken))
+
+        val brokenThenContinued = buildChatDisplayItems(
+            firstChain + reply + secondChain,
+            EmojiCatalog.EMPTY,
+        )
+        assertEquals(setOf("read"), interruptedToolGroupIds(brokenThenContinued))
+
+        val draft = message("draft", "still typing", isMine = true)
+        val stagedOnly = buildChatDisplayItems(
+            firstChain + draft,
+            EmojiCatalog.EMPTY,
+            stagedIds = setOf(draft.id),
+        )
+        assertEquals(emptySet(), interruptedToolGroupIds(stagedOnly))
+    }
+
+    private fun tool(id: String, turnId: String) = message(
+        id = id,
+        content = """{"arguments":"","result":"ok"}""",
+        agentKind = "tool",
+        status = "success",
+        turnId = turnId,
+        toolName = "Read",
+    )
 
     private fun keyOf(vararg messages: ChatMessage): Int =
         displayFeedKey(buildChatDisplayItems(messages.toList(), EmojiCatalog.EMPTY))
