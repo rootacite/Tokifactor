@@ -75,7 +75,11 @@ install_icon() {
 
 package_daemon_jar() {
     echo "install.sh: packaging the TokiFactor daemon jar..."
-    (cd "$REPO_ROOT" && ./gradlew :desktopApp:packageUberJarForCurrentOS --no-daemon)
+    local gradle_args=(--no-daemon)
+    if [ "${TOKIFACTOR_GRADLE_OFFLINE:-0}" = "1" ]; then
+        gradle_args+=(--offline --no-configuration-cache)
+    fi
+    (cd "$REPO_ROOT" && ./gradlew :desktopApp:packageUberJarForCurrentOS "${gradle_args[@]}")
     local jar
     jar="$(ls -t "$JAR_DIR"/*.jar 2>/dev/null | head -n 1 || true)"
     if [ -z "$jar" ] || [ ! -f "$jar" ]; then
