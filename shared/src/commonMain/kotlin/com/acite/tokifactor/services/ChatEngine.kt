@@ -1777,6 +1777,13 @@ class ChatEngine @Inject constructor(
         messages[index] = message.copy(status = pendingStatus)
         emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
         val command = if (allow) "akid-approve $approvalId" else "akid-deny $approvalId"
+        val responseConversation = approvalResponseConversationId(
+            messageConversationId = message.conversationId,
+            senderId = message.senderId,
+            soloActive = soloState.active,
+            soloTargetId = soloState.targetId,
+        )
+        val responseMagic = magicForConversation(responseConversation)
         val sentAt = System.currentTimeMillis()
         val envelope = TextEnvelope(
             sender = settingsStore.displayName,
@@ -1797,7 +1804,7 @@ class ChatEngine @Inject constructor(
         val payload = Base64.encode(
             SecureMessageChannel.encrypt(
                 envelope.encodeToByteArray(),
-                settingsStore.magicString,
+                responseMagic,
             )
         )
         scope.launch(Dispatchers.IO) {
