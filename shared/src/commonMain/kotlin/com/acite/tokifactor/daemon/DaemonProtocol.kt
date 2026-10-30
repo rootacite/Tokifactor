@@ -53,6 +53,7 @@ data class DaemonClientFrame(
     val transferId: String = "",
     val approvalId: String = "",
     val allow: Boolean = false,
+    val approvalMessage: String = "",
     val ids: List<String> = emptyList(),
     val content: String = "",
     val isError: Boolean = false,

@@ -76,6 +76,8 @@ class DaemonProtocolTest {
         val command = DaemonClientFrame(
             requestId = "request-1",
             command = DaemonProtocol.COMMAND_DELETE_MESSAGES,
+            approvalId = "approval-1",
+            approvalMessage = "不要执行这个命令",
             ids = listOf("a", "b"),
             attachmentPaths = listOf("/tmp/a.png"),
             attachmentNames = listOf("图片1"),
@@ -88,6 +90,8 @@ class DaemonProtocolTest {
 
         assertEquals(command, decoded)
         assertEquals(listOf("a", "b"), decoded.ids)
+        assertEquals("approval-1", decoded.approvalId)
+        assertEquals("不要执行这个命令", decoded.approvalMessage)
         assertEquals(listOf("/tmp/a.png"), decoded.attachmentPaths)
         assertEquals(listOf("图片1"), decoded.attachmentNames)
     }

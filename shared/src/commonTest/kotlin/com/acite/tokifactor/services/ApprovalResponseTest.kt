@@ -4,6 +4,7 @@ import com.acite.tokifactor.model.GROUP_CONVERSATION
 import com.acite.tokifactor.model.soloConversationId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class ApprovalResponseTest {
     @Test
@@ -43,5 +44,35 @@ class ApprovalResponseTest {
                 soloTargetId = "",
             ),
         )
+    }
+
+    @Test
+    fun denialCommandAndMetadataCarryTrimmedMessage() {
+        val message = "  不要执行 shell，改成只读检查  "
+
+        assertEquals(
+            "akid-deny approval-1 不要执行 shell，改成只读检查",
+            approvalResponseCommand("approval-1", allow = false, message = message),
+        )
+        assertEquals(
+            mapOf("approvalMessage" to "不要执行 shell，改成只读检查"),
+            approvalResponseMetadata(allow = false, message = message),
+        )
+    }
+
+    @Test
+    fun allowResponseDoesNotCarryApprovalMessage() {
+        assertEquals(
+            "akid-approve approval-1",
+            approvalResponseCommand("approval-1", allow = true, message = "ignored"),
+        )
+        assertTrue(approvalResponseMetadata(allow = true, message = "ignored").isEmpty())
+    }
+
+    @Test
+    fun approvalMessageIsCapped() {
+        val normalized = normalizeApprovalMessage("x".repeat(MAX_APPROVAL_MESSAGE_CHARS + 10))
+
+        assertEquals(MAX_APPROVAL_MESSAGE_CHARS, normalized.length)
     }
 }

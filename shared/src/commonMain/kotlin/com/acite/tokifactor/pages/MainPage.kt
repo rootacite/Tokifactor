@@ -113,6 +113,7 @@ import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.queueBadgeLabel
 import com.acite.tokifactor.model.recentMemberMessages
 import com.acite.tokifactor.services.OutgoingAttachment
+import com.acite.tokifactor.services.MAX_APPROVAL_MESSAGE_CHARS
 import com.acite.tokifactor.ui.theme.TokiBubbleSurface
 import com.acite.tokifactor.ui.theme.TokiSurface
 import com.acite.tokifactor.ui.theme.tokiColors
@@ -865,8 +866,8 @@ fun MainPage(
                             },
                             connected = viewModel.connected,
                             localMemberId = viewModel.memberId,
-                            onApprovalRespond = { approvalId, allow ->
-                                viewModel.respondToApproval(approvalId, allow)
+                            onApprovalRespond = { approvalId, allow, message ->
+                                viewModel.respondToApproval(approvalId, allow, message)
                             },
                             onAvatarClick = {
                                 val message = item.messages.first()
@@ -891,8 +892,12 @@ fun MainPage(
                                         message = message,
                                         connected = viewModel.connected,
                                         localMemberId = viewModel.memberId,
-                                        onRespond = { allow ->
-                                            viewModel.respondToApproval(message.approvalId, allow)
+                                        onRespond = { allow, approvalMessage ->
+                                            viewModel.respondToApproval(
+                                                message.approvalId,
+                                                allow,
+                                                approvalMessage,
+                                            )
                                         },
                                         onAvatarClick = {
                                             openMessageProfile(message)
@@ -2401,7 +2406,7 @@ private fun AgentToolGroupCard(
     onExpandedChange: (Boolean) -> Unit,
     connected: Boolean,
     localMemberId: String,
-    onApprovalRespond: (String, Boolean) -> Unit,
+    onApprovalRespond: (String, Boolean, String) -> Unit,
     onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
@@ -2554,8 +2559,12 @@ private fun AgentToolGroupCard(
                                         message = message,
                                         connected = connected,
                                         localMemberId = localMemberId,
-                                        onRespond = { allow ->
-                                            onApprovalRespond(message.approvalId, allow)
+                                        onRespond = { allow, approvalMessage ->
+                                            onApprovalRespond(
+                                                message.approvalId,
+                                                allow,
+                                                approvalMessage,
+                                            )
                                         },
                                         modifier = Modifier.padding(10.dp),
                                         contentColor = approvalContentColor(message.status),
@@ -2796,7 +2805,7 @@ private fun AgentApprovalCard(
     message: ChatMessage,
     connected: Boolean,
     localMemberId: String,
-    onRespond: (Boolean) -> Unit,
+    onRespond: (Boolean, String) -> Unit,
     onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
@@ -2834,11 +2843,13 @@ private fun AgentApprovalContent(
     message: ChatMessage,
     connected: Boolean,
     localMemberId: String,
-    onRespond: (Boolean) -> Unit,
+    onRespond: (Boolean, String) -> Unit,
     modifier: Modifier = Modifier,
     contentColor: Color = MaterialTheme.colorScheme.onSecondaryContainer,
 ) {
     var expanded by remember(message.approvalId) { mutableStateOf(false) }
+    var showDenyDialog by remember(message.approvalId) { mutableStateOf(false) }
+    var denyMessage by remember(message.approvalId) { mutableStateOf("") }
     val isRequester = approvalRequesterMatches(message.requesterId, localMemberId)
     val canAct = connected && isRequester && message.status == "pending"
     val statusLabel = when (message.status) {
@@ -2911,13 +2922,13 @@ private fun AgentApprovalContent(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { onRespond(true) },
+                        onClick = { onRespond(true, "") },
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Allow")
                     }
                     OutlinedButton(
-                        onClick = { onRespond(false) },
+                        onClick = { showDenyDialog = true },
                         modifier = Modifier.weight(1f),
                     ) {
                         Text("Deny")
@@ -2933,6 +2944,55 @@ private fun AgentApprovalContent(
                 )
             }
         }
+    }
+    if (showDenyDialog && canAct) {
+        AlertDialog(
+            onDismissRequest = { showDenyDialog = false },
+            title = { Text("Deny tool call?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Add an optional message to tell the agent why. " +
+                            "It will be returned with the denial.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = denyMessage,
+                        onValueChange = {
+                            denyMessage = it.take(MAX_APPROVAL_MESSAGE_CHARS)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Approval message") },
+                        placeholder = { Text("What should the agent do instead?") },
+                        minLines = 3,
+                        maxLines = 5,
+                    )
+                    Text(
+                        "${denyMessage.length}/$MAX_APPROVAL_MESSAGE_CHARS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.End),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val messageToSend = denyMessage.trim()
+                        showDenyDialog = false
+                        denyMessage = ""
+                        onRespond(false, messageToSend)
+                    },
+                ) {
+                    Text("Send denial")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDenyDialog = false }) {
+                    Text("Cancel")
+                }
+            },
+        )
     }
 }
 

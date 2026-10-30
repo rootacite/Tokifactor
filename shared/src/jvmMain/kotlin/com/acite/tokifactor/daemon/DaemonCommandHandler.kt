@@ -49,7 +49,11 @@ class DaemonCommandHandler(
                 engine.clearHistory()
             }
             DaemonProtocol.COMMAND_RESPOND_APPROVAL -> withContext(Dispatchers.Main) {
-                engine.respondToApproval(frame.approvalId, frame.allow)
+                engine.respondToApproval(
+                    frame.approvalId,
+                    frame.allow,
+                    frame.approvalMessage,
+                )
             }
             DaemonProtocol.COMMAND_RELOAD_SETTINGS -> {
                 withContext(Dispatchers.IO) { settingsStore.reload() }

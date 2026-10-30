@@ -82,8 +82,11 @@ class MainPageViewModel(
 
     fun cancelOutgoing(transferId: String) = chatEngine.cancelOutgoing(transferId)
 
-    fun respondToApproval(approvalId: String, allow: Boolean) =
-        chatEngine.respondToApproval(approvalId, allow)
+    fun respondToApproval(
+        approvalId: String,
+        allow: Boolean,
+        approvalMessage: String = "",
+    ) = chatEngine.respondToApproval(approvalId, allow, approvalMessage)
 
     fun sendMessage(content: String, attachments: List<OutgoingAttachment> = emptyList()) =
         chatEngine.sendMessage(content, attachments)

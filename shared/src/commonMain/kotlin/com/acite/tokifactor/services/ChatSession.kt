@@ -46,7 +46,11 @@ interface ChatSession {
     fun clearHistory()
     fun saveMessageFile(message: ChatMessage, dest: PlatformFile)
     fun cancelOutgoing(transferId: String)
-    fun respondToApproval(approvalId: String, allow: Boolean)
+    fun respondToApproval(
+        approvalId: String,
+        allow: Boolean,
+        approvalMessage: String = "",
+    )
     fun sendMessage(content: String, attachments: List<OutgoingAttachment> = emptyList())
     fun sendPicture(file: PlatformFile)
     fun sendFile(file: PlatformFile)

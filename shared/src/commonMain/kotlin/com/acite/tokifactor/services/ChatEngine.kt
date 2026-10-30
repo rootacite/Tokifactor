@@ -1762,7 +1762,11 @@ class ChatEngine @Inject constructor(
         outgoingJobs[transferId]?.cancel()
     }
 
-    override fun respondToApproval(approvalId: String, allow: Boolean) {
+    override fun respondToApproval(
+        approvalId: String,
+        allow: Boolean,
+        approvalMessage: String,
+    ) {
         if (!connected || approvalId.isEmpty()) return
         val id = "approval:$approvalId"
         val index = messages.indexOfFirst { it.id == id }
@@ -1776,7 +1780,7 @@ class ChatEngine @Inject constructor(
         val pendingStatus = if (allow) "allow_pending" else "deny_pending"
         messages[index] = message.copy(status = pendingStatus)
         emitEvent(ChatEngineEvent.MessageUpsert(messages[index]))
-        val command = if (allow) "akid-approve $approvalId" else "akid-deny $approvalId"
+        val command = approvalResponseCommand(approvalId, allow, approvalMessage)
         val responseConversation = approvalResponseConversationId(
             messageConversationId = message.conversationId,
             senderId = message.senderId,
@@ -1799,7 +1803,7 @@ class ChatEngine @Inject constructor(
             metadata = mapOf(
                 "memberId" to settingsStore.memberId,
                 "memberName" to settingsStore.displayName,
-            ),
+            ) + approvalResponseMetadata(allow, approvalMessage),
         ).encode()
         val payload = Base64.encode(
             SecureMessageChannel.encrypt(

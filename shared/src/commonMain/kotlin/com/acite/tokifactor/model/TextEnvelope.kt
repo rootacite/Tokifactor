@@ -44,6 +44,7 @@ data class TextEnvelope(
             "timeoutS",
             "details",
             "decision",
+            "approvalMessage",
             "attachmentCount",
             "attachmentIds",
             "attachmentNames",

@@ -556,7 +556,11 @@ class DaemonChatSession @Inject constructor(
         }
     }
 
-    override fun respondToApproval(approvalId: String, allow: Boolean) {
+    override fun respondToApproval(
+        approvalId: String,
+        allow: Boolean,
+        approvalMessage: String,
+    ) {
         if (approvalId.isEmpty()) return
         commandScope.launch {
             request(
@@ -564,6 +568,7 @@ class DaemonChatSession @Inject constructor(
                     command = DaemonProtocol.COMMAND_RESPOND_APPROVAL,
                     approvalId = approvalId,
                     allow = allow,
+                    approvalMessage = approvalMessage,
                 )
             )
         }

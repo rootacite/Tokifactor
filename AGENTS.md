@@ -182,7 +182,9 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   same bubble instead of appending duplicates.
 - `MainPage` groups consecutive `agentKind == "tool"` and `"approval"` messages from
   the same turn into one collapsed card; pending approvals force it open, and
-  selection/deletion operate on every message in the group.
+  selection/deletion operate on every message in the group. Denying an approval opens
+  an optional message dialog; the text is carried both in the approval command and the
+  `approvalMessage` envelope field so Aki can return it to the model as the denial reason.
 - Text messages from agents and human users are split into multiple display bubbles at
   blank-line paragraph boundaries. This is presentation-only: every part keeps the
   original message id, so streaming upserts, selection, deletion, and persistence still

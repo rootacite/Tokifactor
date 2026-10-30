@@ -60,7 +60,8 @@ The channel exists for as long as clients stay connected. There is nothing to de
   historical solo sessions are read-only until you resume them. `akictl solo` uses the
   same retained-control handshake.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
-  tool-approval buttons for the `akid.v1` envelope.
+  tool-approval buttons for the `akid.v1` envelope. Denying a tool opens an optional
+  message field; the message is returned with the denial so the agent can adjust.
 - Messages from agents and human users with multiple blank-line-separated paragraphs
   render as separate bubbles; Markdown lists, fenced/indented code blocks, and block
   quotes stay intact, and selection/delete still target the original message.
