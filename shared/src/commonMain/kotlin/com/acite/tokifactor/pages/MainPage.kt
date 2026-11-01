@@ -93,6 +93,7 @@ import coil3.compose.LocalPlatformContext
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.acite.tokifactor.concealHiddenSpans
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.ToolGroupTone
 import com.acite.tokifactor.model.parseToolCallDetail
@@ -462,7 +463,20 @@ internal fun buildChatDisplayItems(
                 !message.isImage &&
                 message.content.isNotBlank()
             if (isAgentTurn || isUserText) {
-                val segments = splitEmojiSegments(message.content, emojiCatalog)
+                val visible = concealHiddenSpans(message.content)
+                if (visible.isBlank()) {
+                    if (message.hasAttachments) {
+                        items += ChatDisplayItem.Single(message.copy(content = ""), staged)
+                    }
+                    index += 1
+                    continue
+                }
+                val shown = if (visible == message.content) {
+                    message
+                } else {
+                    message.copy(content = visible)
+                }
+                val segments = splitEmojiSegments(shown.content, emojiCatalog)
                 val hasEmoji = segments.any { it is EmojiContentSegment.Emoji }
                 if (isAgentTurn || hasEmoji) {
                     var displayIndex = 0
@@ -471,8 +485,9 @@ internal fun buildChatDisplayItems(
                             is EmojiContentSegment.Text -> {
                                 val paragraphs = splitMessageParagraphs(segment.text)
                                 paragraphs.forEachIndexed { partIndex, paragraph ->
+                                    if (paragraph.isBlank()) return@forEachIndexed
                                     items += ChatDisplayItem.TextPart(
-                                        message = message.copy(content = paragraph),
+                                        message = shown.copy(content = paragraph),
                                         index = displayIndex++,
                                         isLast = segmentIndex == segments.lastIndex &&
                                             partIndex == paragraphs.lastIndex,
@@ -482,7 +497,7 @@ internal fun buildChatDisplayItems(
                             }
                             is EmojiContentSegment.Emoji -> {
                                 items += ChatDisplayItem.EmojiPart(
-                                    message = message,
+                                    message = shown,
                                     token = segment.token,
                                     asset = segment.asset,
                                     index = displayIndex++,
@@ -493,18 +508,19 @@ internal fun buildChatDisplayItems(
                         }
                     }
                 } else {
-                    val paragraphs = splitMessageParagraphs(message.content)
+                    val paragraphs = splitMessageParagraphs(shown.content)
                     if (paragraphs.size > 1) {
                         paragraphs.forEachIndexed { partIndex, paragraph ->
+                            if (paragraph.isBlank()) return@forEachIndexed
                             items += ChatDisplayItem.TextPart(
-                                message = message.copy(content = paragraph),
+                                message = shown.copy(content = paragraph),
                                 index = partIndex,
                                 isLast = partIndex == paragraphs.lastIndex,
                                 staged = staged,
                             )
                         }
                     } else {
-                        items += ChatDisplayItem.Single(message, staged)
+                        items += ChatDisplayItem.Single(shown, staged)
                     }
                 }
             } else {
@@ -3360,6 +3376,7 @@ fun ImageBubble(
     val imageBytes = message.pic
     val imagePath = message.filePath
     val hasImage = imageBytes != null || !imagePath.isNullOrBlank()
+    val caption = concealHiddenSpans(message.content)
     val colors = tokiColors
     var showFull by remember { mutableStateOf(false) }
     val fileSaverLauncher = rememberFileSaverLauncher { }
@@ -3439,9 +3456,9 @@ fun ImageBubble(
                 }
                 }
 
-                if (message.content.isNotBlank()) {
+                if (caption.isNotBlank()) {
                     Text(
-                        text = message.content,
+                        text = caption,
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.text,
                         modifier = Modifier
@@ -3471,7 +3488,7 @@ fun ImageBubble(
                         .fillMaxSize()
                         .padding(16.dp)
                 )
-                if (message.content.isNotBlank()) {
+                if (caption.isNotBlank()) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
@@ -3480,7 +3497,7 @@ fun ImageBubble(
                             .padding(16.dp)
                     ) {
                         Text(
-                            text = message.content,
+                            text = caption,
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White
                         )

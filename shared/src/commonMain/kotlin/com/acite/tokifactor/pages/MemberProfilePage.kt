@@ -1,5 +1,6 @@
 package com.acite.tokifactor.pages
 
+import com.acite.tokifactor.concealHiddenSpans
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -214,9 +215,11 @@ fun MemberProfilePage(
                     )
                 } else {
                     recentMessages.forEach { message ->
+                        val visible = concealHiddenSpans(message.content)
+                        if (visible.isBlank()) return@forEach
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(
-                                text = message.content,
+                                text = visible,
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.text,
                                 maxLines = 3,

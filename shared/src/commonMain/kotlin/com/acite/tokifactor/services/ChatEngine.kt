@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.acite.tokifactor.concealHiddenSpans
 import com.acite.tokifactor.copyFileToPlatformFile
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.aliasList
@@ -1686,7 +1687,11 @@ class ChatEngine @Inject constructor(
             message.isFile -> message.fileName ?: "File"
             message.hasAttachments -> message.attachments.first().name
             message.isImage -> "Photo"
-            else -> message.content.trim().replace(Regex("\\s+"), " ").take(80).ifBlank { "Message" }
+            else -> concealHiddenSpans(message.content)
+                .trim()
+                .replace(Regex("\\s+"), " ")
+                .take(80)
+                .ifBlank { "Message" }
         }
         _inboundNotices.tryEmit(
             InboundNotice(

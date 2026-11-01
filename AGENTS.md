@@ -203,6 +203,12 @@ This is **not** production-grade E2E (fixed nonce + shared passphrase + public b
   advertised in prompts. A recognized token splits the source message into separate
   display items, and the emoji itself renders as a bubble-less transparent message.
   Unknown names, missing resources, fenced code, and inline code stay literal.
+  `~[text]` is a display-only hide span. The chat list, image captions, member
+  profile excerpts, and inbound notice previews omit each complete span, including
+  the markers. The first `]` ends it; an unclosed `~[` stays visible; inline code
+  and fenced code keep the span literal. A message or paragraph that becomes empty
+  is not drawn. History and the wire payload keep the raw text. The input field
+  still shows what the user is typing.
   The composer has an emoji picker grouped by member that exposes every bundled
   sticker to the human user. Selecting one stages a standalone `#[name:desc]`
   fragment and enters the “还没说完” partial state. Staged fragments render in the
