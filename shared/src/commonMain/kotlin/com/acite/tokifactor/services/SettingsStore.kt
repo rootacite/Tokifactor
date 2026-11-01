@@ -1,8 +1,13 @@
 package com.acite.tokifactor.services
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.acite.tokifactor.appAvatarFile
 import com.acite.tokifactor.appConfigFile
 import com.acite.tokifactor.appMqttProbesFile
+import com.acite.tokifactor.appSoloBackgroundFile
 import com.acite.tokifactor.defaultDisplayName
 import com.acite.tokifactor.model.AppearanceIds
 import com.acite.tokifactor.model.CustomBrokerParse
@@ -12,6 +17,7 @@ import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
+import com.acite.tokifactor.model.SoloCharacter
 import com.acite.tokifactor.model.memberDescriptionWeight
 import com.acite.tokifactor.model.newMemberId
 import com.acite.tokifactor.model.truncateMemberDescription
@@ -27,6 +33,7 @@ class SettingsStore @Inject constructor() {
     companion object {
         const val DEFAULT_MAGIC_STRING = "TOKIFACTOR"
         const val MAX_AVATAR_BYTES = 4 * 1024 * 1024
+        const val MAX_SOLO_BACKGROUND_BYTES = 8 * 1024 * 1024
         const val DEFAULT_FONT_SCALE = 1f
         const val MIN_FONT_SCALE = 0.8f
         const val MAX_FONT_SCALE = 1.6f
@@ -96,19 +103,19 @@ class SettingsStore @Inject constructor() {
     var identityBound: Boolean = false
         private set
 
-    var soloActive: Boolean = false
+    var soloActive: Boolean by mutableStateOf(false)
         private set
 
-    var soloSessionId: String = ""
+    var soloSessionId: String by mutableStateOf("")
         private set
 
-    var soloTargetId: String = ""
+    var soloTargetId: String by mutableStateOf("")
         private set
 
-    var soloTargetName: String = ""
+    var soloTargetName: String by mutableStateOf("")
         private set
 
-    var soloStartedAt: String = ""
+    var soloStartedAt: String by mutableStateOf("")
         private set
 
     var conversationId: String = "group"
@@ -131,6 +138,11 @@ class SettingsStore @Inject constructor() {
 
     var avatarBytes: ByteArray? = null
         private set
+
+    private val _soloBackgrounds = mutableStateMapOf<String, ByteArray>()
+
+    val soloBackgrounds: Map<String, ByteArray>
+        get() = _soloBackgrounds
 
     var mqttProbes: Map<String, MqttBrokerProbe> = emptyMap()
         private set
@@ -196,6 +208,7 @@ class SettingsStore @Inject constructor() {
             conversationId = "group"
         }
         avatarBytes = loadAvatar()
+        loadSoloBackgrounds()
         mqttProbes = loadMqttProbes()
         if (!file.exists() ||
             parsed[KEY_DISPLAY_NAME].isNullOrBlank() ||
@@ -303,6 +316,24 @@ class SettingsStore @Inject constructor() {
     }
 
     @Synchronized
+    fun updateSoloBackground(characterKey: String, bytes: ByteArray?): Boolean {
+        val key = SoloCharacter.entries.firstOrNull { it.key == characterKey }?.key
+            ?: return false
+        val file = appSoloBackgroundFile(key)
+        if (bytes == null || bytes.isEmpty()) {
+            if (file.exists()) file.delete()
+            _soloBackgrounds.remove(key)
+            return true
+        }
+        if (bytes.size > MAX_SOLO_BACKGROUND_BYTES) return false
+        file.parentFile?.mkdirs()
+        val copy = bytes.copyOf()
+        file.writeBytes(copy)
+        _soloBackgrounds[key] = copy
+        return true
+    }
+
+    @Synchronized
     fun updateSoloState(
         sessionId: String,
         targetId: String,
@@ -343,6 +374,18 @@ class SettingsStore @Inject constructor() {
             file.readBytes()
         } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun loadSoloBackgrounds() {
+        _soloBackgrounds.clear()
+        for (character in SoloCharacter.entries) {
+            val file = appSoloBackgroundFile(character.key)
+            if (!file.isFile || file.length() !in 1..MAX_SOLO_BACKGROUND_BYTES.toLong()) {
+                continue
+            }
+            val bytes = runCatching { file.readBytes() }.getOrNull() ?: continue
+            if (bytes.isNotEmpty()) _soloBackgrounds[character.key] = bytes
         }
     }
 

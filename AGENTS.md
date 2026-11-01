@@ -137,6 +137,13 @@ Do not use Hilt, Koin, or manual `ViewModelProvider` factories. New injectables 
   typography, translucent surfaces, and the ambient glow backdrop. The selected
   appearance is persisted by `SettingsStore`; reuse `tokiColors`/`tokiTokens`
   instead of adding hardcoded palette values.
+- Active solo overrides the selected appearance with `SoloCharacter` palette/artwork
+  from `ui/theme/SoloTheme.kt`. The app reads `ChatSession.soloState`, not the
+  persisted `SettingsStore` fields, because Linux receives solo changes through
+  `DaemonChatSession` events. Historical solo keeps the normal group appearance.
+  `SettingsStore` stores one optional custom background per character under
+  `solo-background-<aki|fuyu|haru|natsu>` (8 MiB max); custom art overrides built-in
+  art, and unknown solo targets keep the user's current appearance.
 - List state: `MainPageViewModel.messages` is a `mutableStateListOf` exposed as `List<ChatMessage>` (explicit backing field). Mutate the list in place; do not replace it with an immutable copy if you want Compose to see adds/removes.
 - Images: Coil `AsyncImage` from raw `ByteArray`; disk cache disabled.
 - Test isolation: any test that changes `user.home` must perform all filesystem
@@ -153,6 +160,10 @@ connection, subscription, and stable client id never change; the client keeps a
 keyring so group messages still arrive while solo, and routes decrypted messages
 to `group` or `solo:<memberId>` conversations. Never unsubscribe or create a new
 persistent session when entering solo.
+
+The solo UI theme is active-only. It resolves `SoloCharacter` by target name,
+Chinese alias, or legacy member id; unknown targets fall back to the configured
+group appearance. Do not re-add the removed historical-solo top banner.
 
 `MqttService` (`services/MqttService.kt`):
 

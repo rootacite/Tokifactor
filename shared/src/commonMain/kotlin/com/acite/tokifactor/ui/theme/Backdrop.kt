@@ -10,11 +10,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
+import com.acite.tokifactor.model.SoloCharacter
 
 @Composable
 fun TokiBackdrop(
     modifier: Modifier = Modifier,
+    soloCharacter: SoloCharacter? = null,
+    customSoloBackground: ByteArray? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val colors = tokiColors
@@ -23,6 +27,28 @@ fun TokiBackdrop(
             .fillMaxSize()
             .background(colors.bgApp),
     ) {
+        if (soloCharacter != null) {
+            SoloBackgroundImage(
+                character = soloCharacter,
+                customBytes = customSoloBackground,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.45f),
+            )
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                colors.bgApp.copy(alpha = 0.38f),
+                                colors.bgApp.copy(alpha = 0.58f),
+                                colors.bgApp.copy(alpha = 0.78f),
+                            ),
+                        ),
+                    ),
+            )
+        }
         Canvas(Modifier.fillMaxSize()) {
             fun orb(center: Offset, radius: Float, color: Color, core: Float, mid: Float) {
                 drawCircle(

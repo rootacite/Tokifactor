@@ -14,6 +14,7 @@ import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.aliasList
 import com.acite.tokifactor.model.MemberIdentity
 import com.acite.tokifactor.model.MEMBER_KIND_USER
+import com.acite.tokifactor.model.SoloCharacter
 import com.acite.tokifactor.model.canonicalMemberName
 import com.acite.tokifactor.model.legacyMemberId
 import com.acite.tokifactor.model.truncateMemberDescription
@@ -80,6 +81,11 @@ class SettingPageViewModel(
     var avatarError by mutableStateOf<String?>(null)
         private set
 
+    var soloBackgrounds by mutableStateOf(settingsStore.soloBackgrounds.toMap())
+
+    var soloBackgroundError by mutableStateOf<String?>(null)
+        private set
+
     var probing by mutableStateOf(false)
         private set
 
@@ -119,6 +125,8 @@ class SettingPageViewModel(
         customUsername = settingsStore.mqttCustomUsername
         customPassword = settingsStore.mqttCustomPassword
         avatarBytes = settingsStore.avatarBytes
+        soloBackgrounds = settingsStore.soloBackgrounds.toMap()
+        soloBackgroundError = null
         avatarError = null
         nameResolution = null
         pendingIdentitySwitch = null
@@ -214,6 +222,38 @@ class SettingPageViewModel(
         }
     }
 
+    fun pickSoloBackground(character: SoloCharacter, file: PlatformFile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val bytes = try {
+                file.readBytes()
+            } catch (_: Exception) {
+                withContext(Dispatchers.Main) {
+                    soloBackgroundError = "Could not read that image."
+                }
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                when {
+                    bytes.isEmpty() -> soloBackgroundError = "That file is empty."
+                    bytes.size > SettingsStore.MAX_SOLO_BACKGROUND_BYTES -> {
+                        soloBackgroundError =
+                            "Solo background must be under " +
+                                "${SettingsStore.MAX_SOLO_BACKGROUND_BYTES / (1024 * 1024)} MB."
+                    }
+                    else -> {
+                        soloBackgrounds = soloBackgrounds + (character.key to bytes)
+                        soloBackgroundError = null
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearSoloBackground(character: SoloCharacter) {
+        soloBackgrounds = soloBackgrounds - character.key
+        soloBackgroundError = null
+    }
+
     fun testAllBrokers() {
         if (probing) return
         viewModelScope.launch(Dispatchers.IO) {
@@ -263,6 +303,16 @@ class SettingPageViewModel(
         settingsStore.updateFontScale(fontScale)
         settingsStore.updateAppearanceId(appearanceId)
         settingsStore.updateAvatar(avatarBytes)
+        for (character in SoloCharacter.entries) {
+            if (!settingsStore.updateSoloBackground(
+                    character.key,
+                    soloBackgrounds[character.key],
+                )
+            ) {
+                soloBackgroundError = "Could not save ${character.label}'s background."
+                return false
+            }
+        }
         val parsed = currentParse()
         if (selectedBrokerId == MqttBrokers.CUSTOM_ID &&
             customHost.isNotBlank() &&

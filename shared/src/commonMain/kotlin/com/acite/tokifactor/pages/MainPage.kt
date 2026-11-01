@@ -622,11 +622,6 @@ fun MainPage(
     } else {
         viewModel.currentConversationId == "group"
     }
-    val historicalSoloId = viewModel.currentConversationId
-        .takeIf { it.startsWith("solo:") && !solo.active }
-    val historicalSolo = historicalSoloId?.let { id ->
-        viewModel.conversations.firstOrNull { it.id == id }
-    }
     val agentStatus = viewModel.agentStatus
     var emojiCatalog by remember { mutableStateOf(EmojiCatalog.EMPTY) }
 
@@ -831,7 +826,6 @@ fun MainPage(
     val listTopPad by animateDpAsState(
         targetValue = when {
             selectionMode -> 68.dp
-            historicalSolo != null -> 186.dp
             members.isNotEmpty() -> 130.dp
             else -> 16.dp
         },
@@ -1050,46 +1044,6 @@ fun MainPage(
                 },
                 onOpenConversations = { showConversations = true },
             )
-        }
-
-        AnimatedVisibility(
-            visible = historicalSolo != null && !selectionMode,
-            enter = slideInVertically(animationSpec = tween(220)) { -it } + fadeIn(),
-            exit = slideOutVertically(animationSpec = tween(180)) { -it } + fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter),
-        ) {
-            val summary = historicalSolo
-            if (summary != null) {
-                TokiSurface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .padding(top = 132.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    color = colors.bgPanel.copy(alpha = 0.92f),
-                    borderColor = colors.accentPink.copy(alpha = 0.34f),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = summary.title.replace("Solo · ", "Solo with "),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = colors.text,
-                        )
-                        TextButton(
-                            onClick = {
-                                viewModel.startSolo(
-                                    summary.memberId,
-                                    summary.title.removePrefix("Solo · "),
-                                )
-                            }
-                        ) { Text("Continue solo") }
-                    }
-                }
-            }
         }
 
         AnimatedVisibility(

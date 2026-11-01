@@ -17,10 +17,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.acite.tokifactor.pages.MainPage
 import com.acite.tokifactor.pages.SettingPage
+import com.acite.tokifactor.model.SoloCharacter
+import com.acite.tokifactor.services.ChatSession
 import com.acite.tokifactor.services.SettingsStore
 import com.acite.tokifactor.ui.theme.Appearance
 import com.acite.tokifactor.ui.theme.TokiBackdrop
 import com.acite.tokifactor.ui.theme.TokiFactorTheme
+import com.acite.tokifactor.ui.theme.appearance
 import dev.zacsweers.metrox.viewmodel.LocalMetroViewModelFactory
 import dev.zacsweers.metrox.viewmodel.MetroViewModelFactory
 
@@ -31,14 +34,35 @@ private const val ROUTE_SETTINGS = "settings"
 fun App(
     metroVmf: MetroViewModelFactory,
     settingsStore: SettingsStore,
+    chatSession: ChatSession,
 ) {
     var fontScale by remember { mutableFloatStateOf(settingsStore.fontScale) }
     var appearanceId by remember { mutableStateOf(settingsStore.appearanceId) }
+    val soloState = chatSession.soloState
+    val soloCharacter = remember(
+        soloState.active,
+        soloState.targetId,
+        soloState.targetName,
+    ) {
+        if (soloState.active) {
+            SoloCharacter.resolve(
+                soloState.targetName,
+                soloState.targetId,
+            )
+        } else {
+            null
+        }
+    }
+    val effectiveAppearance = soloCharacter?.appearance ?: Appearance.byId(appearanceId)
+    val soloBackground = soloCharacter?.let { settingsStore.soloBackgrounds[it.key] }
     TokiFactorTheme(
-        appearance = Appearance.byId(appearanceId),
+        appearance = effectiveAppearance,
         fontScale = fontScale,
     ) {
-        TokiBackdrop {
+        TokiBackdrop(
+            soloCharacter = soloCharacter,
+            customSoloBackground = soloBackground,
+        ) {
             CompositionLocalProvider(LocalMetroViewModelFactory provides metroVmf) {
                 val navController = rememberNavController()
                 NavHost(

@@ -91,5 +91,73 @@ data class TokiPalette(
             errorContainer = Color(0xFF581723),
             onErrorContainer = Color(0xFFFFDCE0),
         )
+
+        val SoloAki = TokiPalette(
+            bgApp = Color(0xFF1A1015),
+            bgPanel = Color(0xFF25161E),
+            bgCard = Color(0xFF33202B),
+            stroke = Color(0xFF5C3A49),
+            text = Color(0xFFFFF4F8),
+            textDim = Color(0xFFD9B7C4),
+            accentPink = Color(0xFFF59ABF),
+            accentBlue = Color(0xFFD98BAD),
+            accentLilac = Color(0xFFEAB3D2),
+            onAccent = Color(0xFF2A0F1B),
+            error = Color(0xFFFF8B9C),
+            onError = Color(0xFF310811),
+            errorContainer = Color(0xFF511525),
+            onErrorContainer = Color(0xFFFFDCE1),
+        )
+
+        val SoloFuyu = TokiPalette(
+            bgApp = Color(0xFF0F161D),
+            bgPanel = Color(0xFF16212B),
+            bgCard = Color(0xFF1F2D39),
+            stroke = Color(0xFF354A5A),
+            text = Color(0xFFF3F9FC),
+            textDim = Color(0xFFAAC1D0),
+            accentPink = Color(0xFFA9CFE2),
+            accentBlue = Color(0xFF7FAFC8),
+            accentLilac = Color(0xFFD1DEE6),
+            onAccent = Color(0xFF102430),
+            error = Color(0xFFFF8B9C),
+            onError = Color(0xFF310811),
+            errorContainer = Color(0xFF511525),
+            onErrorContainer = Color(0xFFFFDCE1),
+        )
+
+        val SoloHaru = TokiPalette(
+            bgApp = Color(0xFF0F1712),
+            bgPanel = Color(0xFF16221A),
+            bgCard = Color(0xFF1F3124),
+            stroke = Color(0xFF37533D),
+            text = Color(0xFFF5FBF6),
+            textDim = Color(0xFFB1CCB8),
+            accentPink = Color(0xFFA7DFB3),
+            accentBlue = Color(0xFF7DCB97),
+            accentLilac = Color(0xFFCDEACC),
+            onAccent = Color(0xFF102416),
+            error = Color(0xFFFF8B9C),
+            onError = Color(0xFF310811),
+            errorContainer = Color(0xFF511525),
+            onErrorContainer = Color(0xFFFFDCE1),
+        )
+
+        val SoloNatsu = TokiPalette(
+            bgApp = Color(0xFF180F10),
+            bgPanel = Color(0xFF251617),
+            bgCard = Color(0xFF342022),
+            stroke = Color(0xFF5F3538),
+            text = Color(0xFFFFF4F3),
+            textDim = Color(0xFFD8B2AF),
+            accentPink = Color(0xFFF28A84),
+            accentBlue = Color(0xFFE36060),
+            accentLilac = Color(0xFFF5B0AA),
+            onAccent = Color(0xFF2B0D0C),
+            error = Color(0xFFFF8B9C),
+            onError = Color(0xFF310811),
+            errorContainer = Color(0xFF511525),
+            onErrorContainer = Color(0xFFFFDCE1),
+        )
     }
 }

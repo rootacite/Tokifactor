@@ -64,6 +64,7 @@ import com.acite.tokifactor.OnSystemBack
 import com.acite.tokifactor.model.MqttBroker
 import com.acite.tokifactor.model.MqttBrokerProbe
 import com.acite.tokifactor.model.MqttBrokers
+import com.acite.tokifactor.model.SoloCharacter
 import com.acite.tokifactor.services.SettingsStore
 import com.acite.tokifactor.model.memberDescriptionWeight
 import com.acite.tokifactor.ui.theme.Appearance
@@ -72,6 +73,7 @@ import com.acite.tokifactor.ui.theme.TokiChoiceRow
 import com.acite.tokifactor.ui.theme.TokiQuietTextButton
 import com.acite.tokifactor.ui.theme.TokiSection
 import com.acite.tokifactor.ui.theme.TokiSurface
+import com.acite.tokifactor.ui.theme.SoloBackgroundImage
 import com.acite.tokifactor.ui.theme.tokiColors
 import com.acite.tokifactor.ui.theme.tokiTextFieldColors
 import dev.zacsweers.metrox.viewmodel.metroViewModel
@@ -105,6 +107,16 @@ fun SettingPage(
         type = PickerType.Image
     ) { file: PlatformFile? ->
         if (file != null) viewModel.pickAvatar(file)
+    }
+
+    var soloBackgroundTarget by remember { mutableStateOf<SoloCharacter?>(null) }
+    val soloBackgroundPicker = rememberFilePickerLauncher(
+        type = PickerType.Image
+    ) { file: PlatformFile? ->
+        val target = soloBackgroundTarget
+        if (file != null && target != null) {
+            viewModel.pickSoloBackground(target, file)
+        }
     }
 
     val colors = tokiColors
@@ -156,6 +168,30 @@ fun SettingPage(
                         )
                     }
                 }
+            }
+        }
+
+        TokiSection(
+            title = "Solo backgrounds",
+            hint = "Used only while solo is active. Each character can use its built-in artwork or one custom image.",
+        ) {
+            SoloCharacter.entries.forEach { character ->
+                SoloBackgroundRow(
+                    character = character,
+                    customBytes = viewModel.soloBackgrounds[character.key],
+                    onChoose = {
+                        soloBackgroundTarget = character
+                        soloBackgroundPicker.launch()
+                    },
+                    onUseBuiltIn = { viewModel.clearSoloBackground(character) },
+                )
+            }
+            viewModel.soloBackgroundError?.let { error ->
+                Text(
+                    text = error,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.error,
+                )
             }
         }
 
@@ -407,6 +443,62 @@ private fun PaletteSwatch(appearance: Appearance) {
         drawCircle(appearance.palette.accentPink, radius, Offset(11.dp.toPx(), cy))
         drawCircle(appearance.palette.accentBlue, radius, Offset(size.width / 2f, cy))
         drawCircle(appearance.palette.accentLilac, radius, Offset(size.width - 11.dp.toPx(), cy))
+    }
+}
+
+@Composable
+private fun SoloBackgroundRow(
+    character: SoloCharacter,
+    customBytes: ByteArray?,
+    onChoose: () -> Unit,
+    onUseBuiltIn: () -> Unit,
+) {
+    val colors = tokiColors
+    val shape = RoundedCornerShape(16.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.bgCard.copy(alpha = 0.30f))
+            .border(1.dp, colors.stroke.copy(alpha = 0.42f), shape)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(RoundedCornerShape(12.dp)),
+        ) {
+            SoloBackgroundImage(
+                character = character,
+                customBytes = customBytes,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = character.label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = colors.text,
+            )
+            Text(
+                text = if (customBytes != null) "Custom image" else "Built-in artwork",
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.textDim,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TokiQuietTextButton(text = "Choose image", onClick = onChoose)
+                if (customBytes != null) {
+                    TokiQuietTextButton(
+                        text = "Use built-in",
+                        onClick = onUseBuiltIn,
+                        color = colors.textDim,
+                    )
+                }
+            }
+        }
     }
 }
 

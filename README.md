@@ -57,8 +57,10 @@ The channel exists for as long as clients stay connected. There is nothing to de
   messages and notifications continue to arrive; aki-layer remains owned by Aki.
   The conversation
   panel separates the persistent group history from each member's shared solo history;
-  historical solo sessions are read-only until you resume them. `akictl solo` uses the
-  same retained-control handshake.
+  historical solo sessions are read-only without an extra top banner. `akictl solo`
+  uses the same retained-control handshake. While solo is active, the app switches to
+  the target member's palette and built-in artwork; Settings can assign one custom solo
+  background per member.
 - Agent-aware structured replies: Markdown, progress status, tool cards, and inline
   tool-approval buttons for the `akid.v1` envelope. Denying a tool opens an optional
   message field; the message is returned with the denial so the agent can adjust.
@@ -79,10 +81,11 @@ The channel exists for as long as clients stay connected. There is nothing to de
   your bubbles and on your member profile).
 - **Broker picker** with live latency probes (including TLS vs plain TCP) so you can choose a node that actually reaches you.
 - Four KataHana-inspired **dark appearances** (Sky & Sakura, Ink & Paper,
-  Midnight & Snow, Lilac & Peach) with a lavender-glass visual system.
+  Midnight & Snow, Lilac & Peach) with a lavender-glass visual system, plus four
+  character-specific solo palettes and backgrounds.
 - Settings, chat history, photos, and files persist locally (magic string, immutable
   member id, identity-bound flag, name, introduction, broker, device id, avatar, text
-  size, and appearance included).
+  size, appearance, and per-member solo backgrounds included).
 
 There is no iOS, Wasm, or native-mobile target. There is no backend and no user directory.
 

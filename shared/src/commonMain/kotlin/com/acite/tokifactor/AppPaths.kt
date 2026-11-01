@@ -8,6 +8,9 @@ expect fun defaultDisplayName(): String
 
 fun appAvatarFile(): File = File(requireNotNull(appConfigFile().parentFile), "avatar")
 
+fun appSoloBackgroundFile(characterKey: String): File =
+    File(requireNotNull(appConfigFile().parentFile), "solo-background-${characterKey.trim()}")
+
 fun appMqttProbesFile(): File = File(requireNotNull(appConfigFile().parentFile), "mqtt-probes.toml")
 
 fun appIdentitiesFile(): File = File(requireNotNull(appConfigFile().parentFile), "identities.json")

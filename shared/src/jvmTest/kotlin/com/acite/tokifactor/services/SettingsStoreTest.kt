@@ -3,6 +3,7 @@ package com.acite.tokifactor.services
 import java.nio.file.Files
 import kotlin.test.AfterTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -78,5 +79,34 @@ class SettingsStoreTest {
         val ended = SettingsStore()
         assertFalse(ended.soloActive)
         assertEquals("group", ended.conversationId)
+    }
+
+    @Test
+    fun soloBackgroundsPersistPerCharacterAndClear() {
+        System.setProperty("user.home", tempHome.absolutePath)
+        val store = SettingsStore()
+        val aki = byteArrayOf(1, 2, 3)
+        val fuyu = byteArrayOf(4, 5, 6)
+        assertTrue(store.updateSoloBackground("aki", aki))
+        assertTrue(store.updateSoloBackground("fuyu", fuyu))
+        assertFalse(store.updateSoloBackground("unknown", aki))
+
+        val reloaded = SettingsStore()
+        assertContentEquals(aki, reloaded.soloBackgrounds["aki"])
+        assertContentEquals(fuyu, reloaded.soloBackgrounds["fuyu"])
+
+        assertTrue(reloaded.updateSoloBackground("aki", null))
+        val cleared = SettingsStore()
+        assertFalse(cleared.soloBackgrounds.containsKey("aki"))
+        assertContentEquals(fuyu, cleared.soloBackgrounds["fuyu"])
+    }
+
+    @Test
+    fun soloBackgroundRejectsOversizeImages() {
+        System.setProperty("user.home", tempHome.absolutePath)
+        val store = SettingsStore()
+        val bytes = ByteArray(SettingsStore.MAX_SOLO_BACKGROUND_BYTES + 1)
+        assertFalse(store.updateSoloBackground("aki", bytes))
+        assertFalse(store.soloBackgrounds.containsKey("aki"))
     }
 }
