@@ -78,10 +78,13 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlin.math.roundToInt
@@ -116,11 +119,21 @@ import com.acite.tokifactor.model.recentMemberMessages
 import com.acite.tokifactor.services.OutgoingAttachment
 import com.acite.tokifactor.services.MAX_APPROVAL_MESSAGE_CHARS
 import com.acite.tokifactor.ui.theme.TokiBubbleSurface
+import com.acite.tokifactor.ui.theme.TokiPalette
 import com.acite.tokifactor.ui.theme.TokiSurface
 import com.acite.tokifactor.ui.theme.tokiColors
 import com.acite.tokifactor.ui.theme.tokiTextFieldColors
 import com.acite.tokifactor.ui.theme.tokiTokens
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.compose.extendedspans.ExtendedSpans
+import com.mikepenz.markdown.compose.extendedspans.RoundedCornerSpanPainter
+import com.mikepenz.markdown.model.MarkdownAnnotator
+import com.mikepenz.markdown.model.markdownAnnotator
+import com.mikepenz.markdown.model.markdownExtendedSpans
+import com.mikepenz.markdown.utils.getUnescapedTextInNode
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
 import dev.zacsweers.metrox.viewmodel.metroViewModel
 import io.github.vinceglb.filekit.compose.rememberFilePickerLauncher
 import io.github.vinceglb.filekit.compose.rememberFileSaverLauncher
@@ -577,7 +590,8 @@ fun MainPage(
     onOpenSettings: () -> Unit,
     viewModel: MainPageViewModel = metroViewModel(),
 ) {
-    var inputText by remember { mutableStateOf("") }
+    var inputValue by remember { mutableStateOf(TextFieldValue("")) }
+    val inputText = inputValue.text
     val pendingImages = remember { mutableStateListOf<Pair<PlatformFile, String>>() }
     val partialFragments = remember { mutableStateListOf<String>() }
     var renameImageIndex by remember { mutableStateOf<Int?>(null) }
@@ -616,6 +630,21 @@ fun MainPage(
     var showConversations by remember { mutableStateOf(false) }
     var confirmEndSolo by remember { mutableStateOf(false) }
     val members = viewModel.members
+    val mentionTargets = remember(
+        viewModel.members.toList(),
+        viewModel.displayName,
+        viewModel.memberId,
+    ) {
+        buildMentionTargets(
+            members = viewModel.members,
+            selfId = viewModel.memberId,
+            selfName = viewModel.displayName,
+        )
+    }
+    val lastResponder = lastRespondingAgent(viewModel.messages, mentionTargets)
+    val mentionVisual = remember(mentionTargets, colors) {
+        MentionVisualTransformation(mentionTargets, colors)
+    }
     val solo = viewModel.soloState
     val canWrite = if (solo.active) {
         viewModel.currentConversationId == "solo:${solo.targetId}"
@@ -692,7 +721,7 @@ fun MainPage(
         val text = inputText.trim()
         if (text.isEmpty()) return
         partialFragments += text
-        inputText = ""
+        inputValue = TextFieldValue("")
     }
 
     fun stageEmojiFragment(asset: EmojiAsset) {
@@ -710,7 +739,7 @@ fun MainPage(
         val content = assemblePartialMessage(partialFragments.toList(), inputText)
         if (content.isBlank() && attachments.isEmpty()) return
         viewModel.sendMessage(content, attachments)
-        inputText = ""
+        inputValue = TextFieldValue("")
         partialFragments.clear()
         pendingImages.clear()
     }
@@ -922,6 +951,7 @@ fun MainPage(
                                     "error" -> SystemChip(message = message)
                                     else -> AgentTextBubble(
                                         message = message,
+                                        mentionTargets = mentionTargets,
                                         showAttachments = item !is ChatDisplayItem.TextPart || item.isLast,
                                         mineAvatar = viewModel.avatarBytes,
                                         peerAvatar = messageAvatar(message),
@@ -959,6 +989,7 @@ fun MainPage(
                                 )
                                 else -> TextBubble(
                                     message = message,
+                                    mentionTargets = mentionTargets,
                                     showAttachments = item !is ChatDisplayItem.TextPart || item.isLast,
                                     mineAvatar = viewModel.avatarBytes,
                                     peerAvatar = messageAvatar(message),
@@ -1132,30 +1163,11 @@ fun MainPage(
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(
-                                onClick = { showEmojiPicker = true },
-                                enabled = canWrite &&
-                                    viewModel.connected &&
-                                    emojiCatalog.assets.isNotEmpty(),
-                                modifier = Modifier.size(40.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.EmojiEmotions,
-                                    contentDescription = "表情包",
-                                    tint = if (
-                                        canWrite &&
-                                        viewModel.connected &&
-                                        emojiCatalog.assets.isNotEmpty()
-                                    ) {
-                                        colors.accentPink
-                                    } else {
-                                        colors.textDim.copy(alpha = 0.38f)
-                                    },
-                                )
-                            }
                             OutlinedTextField(
-                                value = inputText,
-                                onValueChange = { inputText = it },
+                                value = inputValue,
+                                onValueChange = { next ->
+                                    inputValue = autoCompleteMention(inputValue, next, lastResponder)
+                                },
                                 placeholder = {
                                     Text(
                                         if (canWrite) "Type a message..." else "Read-only conversation"
@@ -1168,6 +1180,7 @@ fun MainPage(
                                 maxLines = 4,
                                 shape = RoundedCornerShape(22.dp),
                                 colors = tokiTextFieldColors(),
+                                visualTransformation = mentionVisual,
                             )
                             Spacer(modifier = Modifier.size(48.dp))
                         }
@@ -1185,6 +1198,8 @@ fun MainPage(
                     onSend = { sendComposerMessage() },
                     onPickFile = { filePickerLauncher.launch() },
                     onPickPhoto = { imagePickerLauncher.launch() },
+                    onPickEmoji = { showEmojiPicker = true },
+                    canEmoji = canWrite && viewModel.connected && emojiCatalog.assets.isNotEmpty(),
                     onOpenSettings = onOpenSettings,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
@@ -1426,7 +1441,7 @@ fun MainPage(
 
 }
 
-private enum class MenuAction { File, Photo, Settings, CancelStaged }
+private enum class MenuAction { File, Photo, Emoji, Settings, CancelStaged }
 
 private enum class ComposerDragLock { None, Send, Menu, Ignore }
 
@@ -1760,6 +1775,8 @@ private fun SendActionButton(
     onSend: () -> Unit,
     onPickFile: () -> Unit,
     onPickPhoto: () -> Unit,
+    onPickEmoji: () -> Unit,
+    canEmoji: Boolean,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1780,6 +1797,8 @@ private fun SendActionButton(
     val currentOnSend by rememberUpdatedState(onSend)
     val currentOnPickFile by rememberUpdatedState(onPickFile)
     val currentOnPickPhoto by rememberUpdatedState(onPickPhoto)
+    val currentOnPickEmoji by rememberUpdatedState(onPickEmoji)
+    val currentCanEmoji by rememberUpdatedState(canEmoji)
     val currentOnOpenSettings by rememberUpdatedState(onOpenSettings)
 
     var pressed by remember { mutableStateOf(false) }
@@ -1811,9 +1830,10 @@ private fun SendActionButton(
         buildList {
             add(MenuSpec(MenuAction.File, 0, Icons.AutoMirrored.Filled.InsertDriveFile, "File"))
             add(MenuSpec(MenuAction.Photo, 1, Icons.Default.Photo, "Photo"))
-            add(MenuSpec(MenuAction.Settings, 2, Icons.Default.Settings, "Settings"))
+            add(MenuSpec(MenuAction.Emoji, 2, Icons.Default.EmojiEmotions, "表情包"))
+            add(MenuSpec(MenuAction.Settings, 3, Icons.Default.Settings, "Settings"))
             if (hasStaged) {
-                add(MenuSpec(MenuAction.CancelStaged, 3, Icons.Default.Close, "取消暂存"))
+                add(MenuSpec(MenuAction.CancelStaged, 4, Icons.Default.Close, "取消暂存"))
             }
         }
     }
@@ -1872,6 +1892,7 @@ private fun SendActionButton(
                                         stepPx = stackStepPx,
                                         hitRadiusPx = itemHitRadiusPx,
                                         connected = currentConnected,
+                                        canEmoji = currentCanEmoji,
                                         hasStaged = currentHasStaged,
                                     )
                                 }
@@ -1899,6 +1920,7 @@ private fun SendActionButton(
                             locked == ComposerDragLock.Menu -> when (hovered) {
                                 MenuAction.File -> if (currentConnected) currentOnPickFile()
                                 MenuAction.Photo -> if (currentConnected) currentOnPickPhoto()
+                                MenuAction.Emoji -> if (currentConnected && currentCanEmoji) currentOnPickEmoji()
                                 MenuAction.Settings -> currentOnOpenSettings()
                                 MenuAction.CancelStaged -> if (currentHasStaged) currentOnCancelStaged()
                                 null -> Unit
@@ -1928,6 +1950,7 @@ private fun SendActionButton(
             menuItems.forEach { spec ->
                 val enabled = when (spec.action) {
                     MenuAction.Settings, MenuAction.CancelStaged -> true
+                    MenuAction.Emoji -> connected && canEmoji
                     else -> connected
                 }
                 val itemProgress = ((stackProgress * 1.45f) - spec.index * 0.22f).coerceIn(0f, 1f)
@@ -1976,7 +1999,7 @@ private fun SendActionButton(
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "Tap to stage an unfinished message, swipe left to send, swipe up for attachments, settings, and canceling staged messages.",
+                    contentDescription = "Tap to stage an unfinished message, swipe left to send, swipe up for attachments, emoji, settings, and canceling staged messages.",
                 )
             }
         }
@@ -2075,6 +2098,7 @@ private fun hitTestStack(
     stepPx: Float,
     hitRadiusPx: Float,
     connected: Boolean,
+    canEmoji: Boolean,
     hasStaged: Boolean,
 ): MenuAction? {
     var best: MenuAction? = null
@@ -2082,11 +2106,13 @@ private fun hitTestStack(
     val items = buildList {
         add(MenuAction.File)
         add(MenuAction.Photo)
+        add(MenuAction.Emoji)
         add(MenuAction.Settings)
         if (hasStaged) add(MenuAction.CancelStaged)
     }
     for ((index, action) in items.withIndex()) {
         if ((action == MenuAction.File || action == MenuAction.Photo) && !connected) continue
+        if (action == MenuAction.Emoji && (!connected || !canEmoji)) continue
         val center = origin + Offset(0f, -stepPx * (index + 1))
         val dist = (pointer - center).getDistance()
         if (dist < bestDist) {
@@ -2282,14 +2308,81 @@ private fun SystemChip(
 }
 
 @Composable
+private fun rememberMentionExtendedSpans() = markdownExtendedSpans {
+    val painter = remember {
+        RoundedCornerSpanPainter(
+            cornerRadius = 7.sp,
+            padding = RoundedCornerSpanPainter.TextPaddingValues(
+                horizontal = 4.sp,
+                vertical = 1.sp,
+            ),
+        )
+    }
+    remember(painter) { ExtendedSpans(painter) }
+}
+
+private fun mentionMarkdownAnnotator(
+    targets: List<MentionTarget>,
+    colors: TokiPalette,
+): MarkdownAnnotator = markdownAnnotator { text, node ->
+    if (node.type != MarkdownTokenTypes.TEXT || node.isInsideCode()) {
+        return@markdownAnnotator false
+    }
+    val plain = node.getUnescapedTextInNode(text)
+    val spans = findMentionSpans(plain, targets)
+    if (spans.isEmpty()) return@markdownAnnotator false
+    var cursor = 0
+    spans.forEach { span ->
+        append(plain.substring(cursor, span.start))
+        val color = span.target.color(colors)
+        pushStyle(
+            SpanStyle(
+                color = color,
+                background = color.copy(alpha = 0.16f),
+                fontWeight = FontWeight.SemiBold,
+            ),
+        )
+        append(plain.substring(span.start, span.end))
+        pop()
+        cursor = span.end
+    }
+    append(plain.substring(cursor))
+    true
+}
+
+private fun ASTNode.isInsideCode(): Boolean {
+    var current = parent
+    while (current != null) {
+        when (current.type) {
+            MarkdownElementTypes.CODE_SPAN,
+            MarkdownElementTypes.CODE_BLOCK,
+            MarkdownElementTypes.CODE_FENCE,
+            MarkdownTokenTypes.CODE_LINE,
+            MarkdownTokenTypes.CODE_FENCE_CONTENT,
+            -> return true
+        }
+        current = current.parent
+    }
+    return false
+}
+
+@Composable
 private fun AgentTextBubble(
     message: ChatMessage,
+    mentionTargets: List<MentionTarget>,
     showAttachments: Boolean = true,
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
     onAvatarClick: (() -> Unit)? = null,
 ) {
     val colors = tokiColors
+    val hasMentions = remember(message.content, mentionTargets) {
+        findMentionSpans(message.content, mentionTargets).isNotEmpty()
+    }
+    val annotator = remember(message.content, mentionTargets, colors) {
+        mentionMarkdownAnnotator(mentionTargets, colors)
+    }
+    val extendedSpans = rememberMentionExtendedSpans()
     ChatRow(
         isMine = false,
         sender = message.sender,
@@ -2306,10 +2399,19 @@ private fun AgentTextBubble(
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 if (message.content.isNotBlank()) {
                     SelectionContainer {
-                        Markdown(
-                            content = message.content,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        if (hasMentions) {
+                            Markdown(
+                                content = message.content,
+                                modifier = Modifier.fillMaxWidth(),
+                                annotator = annotator,
+                                extendedSpans = extendedSpans,
+                            )
+                        } else {
+                            Markdown(
+                                content = message.content,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
                 if (showAttachments && message.hasAttachments) {
@@ -3094,6 +3196,7 @@ internal fun ChatRow(
 @Composable
 fun TextBubble(
     message: ChatMessage,
+    mentionTargets: List<MentionTarget> = emptyList(),
     showAttachments: Boolean = true,
     mineAvatar: ByteArray? = null,
     peerAvatar: ByteArray? = null,
@@ -3138,8 +3241,9 @@ fun TextBubble(
                         .heightIn(max = maxPreviewHeight)
                         .clipToBounds()
                     if (collapsed) {
-                        Text(
+                        MentionAwareText(
                             text = body,
+                            targets = mentionTargets,
                             style = MaterialTheme.typography.bodyLarge,
                             color = contentColor,
                             overflow = TextOverflow.Ellipsis,
@@ -3154,8 +3258,9 @@ fun TextBubble(
                         )
                     } else {
                         SelectionContainer {
-                            Text(
+                            MentionAwareText(
                                 text = body,
+                                targets = mentionTargets,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = contentColor,
                                 overflow = TextOverflow.Ellipsis,
@@ -3218,6 +3323,7 @@ fun TextBubble(
     if (showViewer && showPreview) {
         TextViewerDialog(
             text = body,
+            mentionTargets = mentionTargets,
             onDismiss = { showViewer = false },
         )
     }
@@ -3256,6 +3362,7 @@ private fun CopyIconButton(
 @Composable
 private fun TextViewerDialog(
     text: String,
+    mentionTargets: List<MentionTarget>,
     onDismiss: () -> Unit,
 ) {
     val colors = tokiColors
@@ -3303,8 +3410,9 @@ private fun TextViewerDialog(
                         .weight(1f)
                         .fillMaxWidth(),
                 ) {
-                    Text(
+                    MentionAwareText(
                         text = text,
+                        targets = mentionTargets,
                         style = MaterialTheme.typography.bodyLarge,
                         color = colors.text,
                         modifier = Modifier
