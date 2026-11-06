@@ -152,4 +152,52 @@ class AgentParagraphsTest {
         assertEquals(listOf(code), splitMessageParagraphs(code))
         assertEquals(listOf(longerFence), splitMessageParagraphs(longerFence))
     }
+
+    @Test
+    fun splitsAtBreakTags() {
+        assertEquals(
+            listOf("First", "Second", "Third", "Fourth"),
+            splitMessageParagraphs("First<br>Second<br/>Third<br />Fourth"),
+        )
+    }
+
+    @Test
+    fun keepsBreakTagsInsideFencedCode() {
+        val content = "Before\n\n```html\n<div><br></div>\n```\n\nAfter"
+        assertEquals(
+            listOf(
+                "Before",
+                "```html\n<div><br></div>\n```",
+                "After",
+            ),
+            splitMessageParagraphs(content),
+        )
+    }
+
+    @Test
+    fun dropsDelimiterArtifactParagraphs() {
+        val content = "真要动手敲命令啦？\n\n" +
+            "刚才还一本正经地在群里跟我打赌呢。\n\n" +
+            "\\n\\n\n\n" +
+            "\\n\\n\n\n" +
+            "来吧，我在这儿等着呢。"
+
+        assertEquals(
+            listOf(
+                "真要动手敲命令啦？",
+                "刚才还一本正经地在群里跟我打赌呢。",
+                "来吧，我在这儿等着呢。",
+            ),
+            splitMessageParagraphs(content),
+        )
+    }
+
+    @Test
+    fun dropsQuotedDelimiterArtifactParagraphs() {
+        val content = "段落一\n\n'\\n\\n'\n\n段落二"
+        assertEquals(
+            listOf("段落一", "段落二"),
+            splitMessageParagraphs(content),
+        )
+    }
 }

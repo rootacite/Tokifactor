@@ -1,5 +1,46 @@
 package com.acite.tokifactor.pages
 
+private val BR_TAG_REGEX = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
+private val ESCAPE_DELIMITER_REGEX = Regex("""^(?:['"`]?\\+n['"`]?[ \t]*)+$""", RegexOption.IGNORE_CASE)
+
+private fun isDelimiterArtifact(text: String): Boolean {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return true
+    return ESCAPE_DELIMITER_REGEX.matches(trimmed)
+}
+
+private fun normalizeBreakTags(content: String): String {
+    if (!content.contains("<br", ignoreCase = true)) return content
+    val lines = content.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+    val result = mutableListOf<String>()
+    var fence: Fence? = null
+
+    for (line in lines) {
+        val activeFence = fence
+        if (activeFence != null) {
+            result += line
+            if (isClosingFence(line, activeFence)) {
+                fence = null
+            }
+            continue
+        }
+
+        val openingFence = openingFence(line)
+        if (openingFence != null) {
+            result += line
+            fence = openingFence
+            continue
+        }
+
+        if (line.contains("<br", ignoreCase = true)) {
+            result += line.replace(BR_TAG_REGEX, "\n\n")
+        } else {
+            result += line
+        }
+    }
+    return result.joinToString("\n")
+}
+
 /**
  * Split a message into display paragraphs at blank lines.
  *
@@ -10,7 +51,7 @@ package com.acite.tokifactor.pages
  */
 internal fun splitMessageParagraphs(content: String): List<String> {
     if (content.isBlank()) return listOf(content)
-    val normalized = content.replace("\r\n", "\n").replace('\r', '\n')
+    val normalized = normalizeBreakTags(content).replace("\r\n", "\n").replace('\r', '\n')
     val lines = normalized.split('\n')
     val paragraphs = mutableListOf<String>()
     val current = mutableListOf<String>()
@@ -22,7 +63,10 @@ internal fun splitMessageParagraphs(content: String): List<String> {
 
     fun flush() {
         if (current.any(String::isNotBlank)) {
-            paragraphs += current.joinToString("\n")
+            val text = current.joinToString("\n")
+            if (!isDelimiterArtifact(text)) {
+                paragraphs += text
+            }
         }
         current.clear()
         pendingBlanks.clear()

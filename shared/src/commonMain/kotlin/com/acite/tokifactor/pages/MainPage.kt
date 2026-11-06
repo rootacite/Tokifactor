@@ -1953,7 +1953,11 @@ private fun SendActionButton(
                     MenuAction.Emoji -> connected && canEmoji
                     else -> connected
                 }
-                val itemProgress = ((stackProgress * 1.45f) - spec.index * 0.22f).coerceIn(0f, 1f)
+                val itemProgress = stackItemProgress(
+                    stackProgress = stackProgress,
+                    index = spec.index,
+                    totalItems = menuItems.size,
+                )
                 StackMenuItem(
                     index = spec.index,
                     stepPx = stackStepPx,
@@ -2040,6 +2044,18 @@ private data class MenuSpec(
     val icon: ImageVector,
     val label: String,
 )
+
+internal fun stackItemProgress(
+    stackProgress: Float,
+    index: Int,
+    totalItems: Int,
+    duration: Float = 0.65f,
+): Float {
+    if (totalItems <= 1) return stackProgress.coerceIn(0f, 1f)
+    val maxIndex = totalItems - 1
+    val start = (index.toFloat() / maxIndex) * (1f - duration)
+    return if (duration <= 0f) 1f else ((stackProgress - start) / duration).coerceIn(0f, 1f)
+}
 
 @Composable
 private fun BoxScope.StackMenuItem(
