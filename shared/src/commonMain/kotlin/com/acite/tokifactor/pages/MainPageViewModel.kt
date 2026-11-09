@@ -6,6 +6,7 @@ import com.acite.tokifactor.model.ConversationSummary
 import com.acite.tokifactor.model.SoloState
 import com.acite.tokifactor.services.ChatSession
 import com.acite.tokifactor.services.OutgoingAttachment
+import com.acite.tokifactor.services.SettingsStore
 import dev.zacsweers.metro.AppScope
 import dev.zacsweers.metro.ContributesIntoMap
 import dev.zacsweers.metro.Inject
@@ -17,7 +18,11 @@ import io.github.vinceglb.filekit.core.PlatformFile
 @ContributesIntoMap(AppScope::class)
 class MainPageViewModel(
     private val chatEngine: ChatSession,
+    private val settingsStore: SettingsStore,
 ) : ViewModel() {
+
+    val showInnerVoice: Boolean
+        get() = settingsStore.showInnerVoice
 
     val messages: List<ChatMessage>
         get() = chatEngine.visibleMessages

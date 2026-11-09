@@ -102,3 +102,64 @@ private fun joinAroundRemoval(left: String, right: String): String {
         !isLineBreak(rightTrimmed.first())
     return if (needSpace) "$leftTrimmed $rightTrimmed" else leftTrimmed + rightTrimmed
 }
+
+data class InnerVoiceSegment(
+    val text: String,
+    val isInnerVoice: Boolean,
+)
+
+fun parseInnerVoiceSegments(content: String): List<InnerVoiceSegment> {
+    if (!content.contains("~[")) {
+        return if (content.isEmpty()) emptyList() else listOf(InnerVoiceSegment(content, isInnerVoice = false))
+    }
+    val protected = protectedIndexes(content)
+    val spans = hiddenSpanRanges(content, protected)
+    if (spans.isEmpty()) {
+        return listOf(InnerVoiceSegment(content, isInnerVoice = false))
+    }
+    val segments = mutableListOf<InnerVoiceSegment>()
+    var cursor = 0
+    for ((start, end) in spans) {
+        if (start > cursor) {
+            segments += InnerVoiceSegment(content.substring(cursor, start), isInnerVoice = false)
+        }
+        val innerText = content.substring(start + 2, end - 1)
+        segments += InnerVoiceSegment(innerText, isInnerVoice = true)
+        cursor = end
+    }
+    if (cursor < content.length) {
+        segments += InnerVoiceSegment(content.substring(cursor), isInnerVoice = false)
+    }
+    return segments
+}
+
+fun hasHiddenSpans(content: String): Boolean {
+    if (!content.contains("~[")) return false
+    val protected = protectedIndexes(content)
+    return hiddenSpanRanges(content, protected).isNotEmpty()
+}
+
+fun isEntirelyHiddenSpan(content: String): Boolean {
+    if (content.isBlank()) return false
+    val segments = parseInnerVoiceSegments(content)
+    if (segments.none { it.isInnerVoice }) return false
+    return segments.all { it.isInnerVoice || it.text.isBlank() }
+}
+
+fun unwrapInnerVoice(content: String): String {
+    val segments = parseInnerVoiceSegments(content)
+    if (segments.none { it.isInnerVoice }) return content
+    return segments.joinToString("") { it.text }.trim()
+}
+
+fun formatInnerVoiceText(content: String): String {
+    val segments = parseInnerVoiceSegments(content)
+    if (segments.none { it.isInnerVoice }) return content
+    if (isEntirelyHiddenSpan(content)) {
+        return "💭 " + unwrapInnerVoice(content)
+    }
+    return segments.joinToString("") { segment ->
+        if (segment.isInnerVoice) " 💭 ${segment.text} " else segment.text
+    }
+}
+

@@ -59,6 +59,7 @@ class SettingsStore @Inject constructor() {
         private const val KEY_SOLO_TARGET_NAME = "soloTargetName"
         private const val KEY_SOLO_STARTED_AT = "soloStartedAt"
         private const val KEY_CONVERSATION_ID = "conversationId"
+        private const val KEY_SHOW_INNER_VOICE = "showInnerVoice"
     }
 
     var magicString: String = DEFAULT_MAGIC_STRING
@@ -119,6 +120,9 @@ class SettingsStore @Inject constructor() {
         private set
 
     var conversationId: String = "group"
+        private set
+
+    var showInnerVoice: Boolean by mutableStateOf(false)
         private set
 
     val mqttBroker: MqttBroker
@@ -203,6 +207,7 @@ class SettingsStore @Inject constructor() {
         soloTargetName = parsed[KEY_SOLO_TARGET_NAME].orEmpty()
         soloStartedAt = parsed[KEY_SOLO_STARTED_AT].orEmpty()
         conversationId = parsed[KEY_CONVERSATION_ID]?.ifBlank { null } ?: "group"
+        showInnerVoice = parsed[KEY_SHOW_INNER_VOICE]?.toBooleanStrictOrNull() ?: false
         if (soloActive && soloTargetId.isBlank()) {
             soloActive = false
             conversationId = "group"
@@ -367,6 +372,11 @@ class SettingsStore @Inject constructor() {
         persist()
     }
 
+    fun updateShowInnerVoice(value: Boolean) {
+        showInnerVoice = value
+        persist()
+    }
+
     private fun loadAvatar(): ByteArray? {
         val file = appAvatarFile()
         if (!file.exists() || file.length() <= 0L) return null
@@ -450,7 +460,8 @@ class SettingsStore @Inject constructor() {
                 "$KEY_SOLO_TARGET_ID = \"${escapeTomlString(soloTargetId)}\"\n" +
                 "$KEY_SOLO_TARGET_NAME = \"${escapeTomlString(soloTargetName)}\"\n" +
                 "$KEY_SOLO_STARTED_AT = \"${escapeTomlString(soloStartedAt)}\"\n" +
-                "$KEY_CONVERSATION_ID = \"${escapeTomlString(conversationId)}\"\n"
+                "$KEY_CONVERSATION_ID = \"${escapeTomlString(conversationId)}\"\n" +
+                "$KEY_SHOW_INNER_VOICE = \"$showInnerVoice\"\n"
         val tmp = File(requireNotNull(file.parentFile), "${file.name}.tmp")
         tmp.writeText(body)
         if (!tmp.renameTo(file)) {

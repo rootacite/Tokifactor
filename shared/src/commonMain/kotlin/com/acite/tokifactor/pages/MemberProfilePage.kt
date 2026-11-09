@@ -1,6 +1,7 @@
 package com.acite.tokifactor.pages
 
 import com.acite.tokifactor.concealHiddenSpans
+import com.acite.tokifactor.formatInnerVoiceText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -59,6 +60,7 @@ fun MemberProfilePage(
     soloActive: Boolean = false,
     soloTargetId: String = "",
     onSolo: (() -> Unit)? = null,
+    showInnerVoice: Boolean = false,
 ) {
     val colors = tokiColors
     val now = remember(member.memberId) { System.currentTimeMillis() }
@@ -215,7 +217,7 @@ fun MemberProfilePage(
                     )
                 } else {
                     recentMessages.forEach { message ->
-                        val visible = concealHiddenSpans(message.content)
+                        val visible = if (showInnerVoice) formatInnerVoiceText(message.content) else concealHiddenSpans(message.content)
                         if (visible.isBlank()) return@forEach
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                             Text(

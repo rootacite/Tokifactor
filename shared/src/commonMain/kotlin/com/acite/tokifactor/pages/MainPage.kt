@@ -78,6 +78,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,6 +98,11 @@ import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.acite.tokifactor.concealHiddenSpans
+import com.acite.tokifactor.formatInnerVoiceText
+import com.acite.tokifactor.hasHiddenSpans
+import com.acite.tokifactor.isEntirelyHiddenSpan
+import com.acite.tokifactor.parseInnerVoiceSegments
+import com.acite.tokifactor.unwrapInnerVoice
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.ToolGroupTone
 import com.acite.tokifactor.model.parseToolCallDetail
@@ -118,6 +124,7 @@ import com.acite.tokifactor.model.queueBadgeLabel
 import com.acite.tokifactor.model.recentMemberMessages
 import com.acite.tokifactor.services.OutgoingAttachment
 import com.acite.tokifactor.services.MAX_APPROVAL_MESSAGE_CHARS
+import com.acite.tokifactor.ui.theme.InnerVoiceBubbleSurface
 import com.acite.tokifactor.ui.theme.TokiBubbleSurface
 import com.acite.tokifactor.ui.theme.TokiPalette
 import com.acite.tokifactor.ui.theme.TokiSurface
@@ -125,6 +132,7 @@ import com.acite.tokifactor.ui.theme.tokiColors
 import com.acite.tokifactor.ui.theme.tokiTextFieldColors
 import com.acite.tokifactor.ui.theme.tokiTokens
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.extendedspans.ExtendedSpans
 import com.mikepenz.markdown.compose.extendedspans.RoundedCornerSpanPainter
 import com.mikepenz.markdown.model.MarkdownAnnotator
@@ -452,6 +460,7 @@ internal fun buildChatDisplayItems(
     messages: List<ChatMessage>,
     emojiCatalog: EmojiCatalog,
     stagedIds: Set<String> = emptySet(),
+    showInnerVoice: Boolean = false,
 ): List<ChatDisplayItem> {
     val items = mutableListOf<ChatDisplayItem>()
     var index = 0
@@ -476,7 +485,15 @@ internal fun buildChatDisplayItems(
                 !message.isImage &&
                 message.content.isNotBlank()
             if (isAgentTurn || isUserText) {
-                val visible = concealHiddenSpans(message.content)
+                val visible = if (showInnerVoice) {
+                    if (isEntirelyHiddenSpan(message.content) && unwrapInnerVoice(message.content).isBlank()) {
+                        ""
+                    } else {
+                        message.content
+                    }
+                } else {
+                    concealHiddenSpans(message.content)
+                }
                 if (visible.isBlank()) {
                     if (message.hasAttachments) {
                         items += ChatDisplayItem.Single(message.copy(content = ""), staged)
@@ -800,11 +817,16 @@ fun MainPage(
             messages = stagedMessages,
             emojiCatalog = emojiCatalog,
             stagedIds = stagedMessages.map { it.id }.toSet(),
+            showInnerVoice = viewModel.showInnerVoice,
         )
     }
-    val displayItems by remember(viewModel.messages, emojiCatalog, stagedDisplayItems) {
+    val displayItems by remember(viewModel.messages, emojiCatalog, stagedDisplayItems, viewModel.showInnerVoice) {
         derivedStateOf {
-            buildChatDisplayItems(viewModel.messages, emojiCatalog) + stagedDisplayItems
+            buildChatDisplayItems(
+                messages = viewModel.messages,
+                emojiCatalog = emojiCatalog,
+                showInnerVoice = viewModel.showInnerVoice,
+            ) + stagedDisplayItems
         }
     }
     val expandedToolGroups = remember { mutableStateMapOf<String, Boolean>() }
@@ -958,6 +980,7 @@ fun MainPage(
                                         onAvatarClick = {
                                             openMessageProfile(message)
                                         },
+                                        showInnerVoice = viewModel.showInnerVoice,
                                     )
                                 }
                                 message.isFile -> FileBubble(
@@ -986,6 +1009,7 @@ fun MainPage(
                                     } else {
                                         null
                                     },
+                                    showInnerVoice = viewModel.showInnerVoice,
                                 )
                                 else -> TextBubble(
                                     message = message,
@@ -1001,6 +1025,7 @@ fun MainPage(
                                     } else {
                                         null
                                     },
+                                    showInnerVoice = viewModel.showInnerVoice,
                                 )
                             }
                         }
@@ -1279,6 +1304,7 @@ fun MainPage(
                 } else {
                     null
                 },
+                showInnerVoice = viewModel.showInnerVoice,
             )
         }
     }
@@ -2340,29 +2366,59 @@ private fun rememberMentionExtendedSpans() = markdownExtendedSpans {
 private fun mentionMarkdownAnnotator(
     targets: List<MentionTarget>,
     colors: TokiPalette,
+    showInnerVoice: Boolean = false,
 ): MarkdownAnnotator = markdownAnnotator { text, node ->
     if (node.type != MarkdownTokenTypes.TEXT || node.isInsideCode()) {
         return@markdownAnnotator false
     }
     val plain = node.getUnescapedTextInNode(text)
+    val hasInner = showInnerVoice && hasHiddenSpans(plain)
     val spans = findMentionSpans(plain, targets)
-    if (spans.isEmpty()) return@markdownAnnotator false
-    var cursor = 0
-    spans.forEach { span ->
-        append(plain.substring(cursor, span.start))
-        val color = span.target.color(colors)
-        pushStyle(
-            SpanStyle(
-                color = color,
-                background = color.copy(alpha = 0.16f),
-                fontWeight = FontWeight.SemiBold,
-            ),
-        )
-        append(plain.substring(span.start, span.end))
-        pop()
-        cursor = span.end
+    if (!hasInner && spans.isEmpty()) return@markdownAnnotator false
+
+    fun appendSegmentWithMentions(segText: String) {
+        val segSpans = findMentionSpans(segText, targets)
+        var cursor = 0
+        segSpans.forEach { span ->
+            append(segText.substring(cursor, span.start))
+            val color = span.target.color(colors)
+            pushStyle(
+                SpanStyle(
+                    color = color,
+                    background = color.copy(alpha = 0.16f),
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+            append(segText.substring(span.start, span.end))
+            pop()
+            cursor = span.end
+        }
+        append(segText.substring(cursor))
     }
-    append(plain.substring(cursor))
+
+    if (hasInner) {
+        val segments = parseInnerVoiceSegments(plain)
+        segments.forEach { segment ->
+            if (segment.isInnerVoice) {
+                pushStyle(
+                    SpanStyle(
+                        color = colors.accentLilac,
+                        background = colors.accentLilac.copy(alpha = 0.18f),
+                        fontStyle = FontStyle.Italic,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+                append(" 💭 ")
+                appendSegmentWithMentions(segment.text)
+                append(" ")
+                pop()
+            } else {
+                appendSegmentWithMentions(segment.text)
+            }
+        }
+    } else {
+        appendSegmentWithMentions(plain)
+    }
     true
 }
 
@@ -2390,13 +2446,16 @@ private fun AgentTextBubble(
     mineAvatar: ByteArray?,
     peerAvatar: ByteArray?,
     onAvatarClick: (() -> Unit)? = null,
+    showInnerVoice: Boolean = false,
 ) {
     val colors = tokiColors
-    val hasMentions = remember(message.content, mentionTargets) {
-        findMentionSpans(message.content, mentionTargets).isNotEmpty()
+    val isInnerVoice = showInnerVoice && isEntirelyHiddenSpan(message.content)
+    val displayContent = if (isInnerVoice) unwrapInnerVoice(message.content) else message.content
+    val hasMentions = remember(displayContent, mentionTargets) {
+        findMentionSpans(displayContent, mentionTargets).isNotEmpty()
     }
-    val annotator = remember(message.content, mentionTargets, colors) {
-        mentionMarkdownAnnotator(mentionTargets, colors)
+    val annotator = remember(displayContent, mentionTargets, colors, showInnerVoice, isInnerVoice) {
+        mentionMarkdownAnnotator(mentionTargets, colors, showInnerVoice && !isInnerVoice)
     }
     val extendedSpans = rememberMentionExtendedSpans()
     ChatRow(
@@ -2407,37 +2466,103 @@ private fun AgentTextBubble(
         peerAvatar = peerAvatar,
         onAvatarClick = onAvatarClick,
     ) {
-        TokiBubbleSurface(
-            isMine = false,
-            shape = bubbleShape(false),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+        val bubbleSurfaceModifier = Modifier.fillMaxWidth()
+        val bubbleContent: @Composable BoxScope.() -> Unit = {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                if (message.content.isNotBlank()) {
+                if (isInnerVoice) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(bottom = 6.dp),
+                    ) {
+                        Text(
+                            text = "💭 心声",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.accentLilac,
+                        )
+                    }
+                }
+                if (displayContent.isNotBlank()) {
                     SelectionContainer {
-                        if (hasMentions) {
-                            Markdown(
-                                content = message.content,
+                        if (isStandaloneMath(displayContent)) {
+                            MathBlock(
+                                latex = displayContent,
                                 modifier = Modifier.fillMaxWidth(),
-                                annotator = annotator,
-                                extendedSpans = extendedSpans,
+                                color = colors.text,
                             )
                         } else {
-                            Markdown(
-                                content = message.content,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
+                            val components = remember(colors, mentionTargets, showInnerVoice, isInnerVoice) {
+                                val defaults = markdownComponents()
+                                markdownComponents(
+                                    codeFence = { model ->
+                                        val fenceInfo = model.node.children.firstOrNull { it.type == MarkdownTokenTypes.FENCE_LANG }
+                                            ?.getUnescapedTextInNode(model.content)?.trim()?.lowercase()
+                                        if (fenceInfo == "math" || fenceInfo == "latex") {
+                                            val lines = model.node.getUnescapedTextInNode(model.content).lines()
+                                            val code = if (lines.size > 2) lines.subList(1, lines.size - 1).joinToString("\n").trim() else ""
+                                            MathBlock(latex = code, modifier = Modifier.fillMaxWidth(), color = colors.text)
+                                        } else {
+                                            defaults.codeFence(model)
+                                        }
+                                    },
+                                    paragraph = { model ->
+                                        val plain = model.node.getUnescapedTextInNode(model.content)
+                                        if (hasMath(plain) || isStandaloneMath(plain)) {
+                                            MentionAwareText(
+                                                text = plain,
+                                                targets = mentionTargets,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = colors.text,
+                                                showInnerVoice = showInnerVoice && !isInnerVoice,
+                                            )
+                                        } else {
+                                            defaults.paragraph(model)
+                                        }
+                                    }
+                                )
+                            }
+                            if (hasMentions || (showInnerVoice && !isInnerVoice && hasHiddenSpans(displayContent))) {
+                                Markdown(
+                                    content = displayContent,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    annotator = annotator,
+                                    extendedSpans = extendedSpans,
+                                    components = components,
+                                )
+                            } else {
+                                Markdown(
+                                    content = displayContent,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    components = components,
+                                )
+                            }
                         }
                     }
                 }
                 if (showAttachments && message.hasAttachments) {
-                    if (message.content.isNotBlank()) Spacer(modifier = Modifier.height(8.dp))
+                    if (displayContent.isNotBlank()) Spacer(modifier = Modifier.height(8.dp))
                     MessageAttachmentStrip(attachments = message.attachments)
                 }
             }
         }
+        if (isInnerVoice) {
+            InnerVoiceBubbleSurface(
+                isMine = false,
+                shape = bubbleShape(false),
+                modifier = bubbleSurfaceModifier,
+                content = bubbleContent,
+            )
+        } else {
+            TokiBubbleSurface(
+                isMine = false,
+                shape = bubbleShape(false),
+                modifier = bubbleSurfaceModifier,
+                content = bubbleContent,
+            )
+        }
         CopyIconButton(
-            text = message.content,
+            text = displayContent,
             tint = colors.textDim,
         )
     }
@@ -3219,17 +3344,19 @@ fun TextBubble(
     onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onCancel: (() -> Unit)? = null,
+    showInnerVoice: Boolean = false,
 ) {
     val isMine = message.isMine
     val colors = tokiColors
     val contentColor = colors.text
+    val isInnerVoice = showInnerVoice && isEntirelyHiddenSpan(message.content)
+    val body = if (isInnerVoice) unwrapInnerVoice(message.content) else message.content
     val maxPreviewHeight = with(LocalDensity.current) {
         val raw = LocalWindowInfo.current.containerSize.height
         if (raw <= 0) 240.dp else (raw / 3f).toDp().coerceAtLeast(96.dp)
     }
-    var overflows by remember(message.id, message.content) { mutableStateOf(false) }
+    var overflows by remember(message.id, body) { mutableStateOf(false) }
     var showViewer by remember { mutableStateOf(false) }
-    val body = message.content
     val showPreview = body.isNotEmpty()
     val collapsed = overflows && showPreview
 
@@ -3242,29 +3369,46 @@ fun TextBubble(
         onAvatarClick = onAvatarClick,
         modifier = modifier,
     ) {
-        TokiBubbleSurface(
-            isMine = isMine,
-            shape = bubbleShape(isMine),
-            modifier = if (collapsed) {
-                Modifier.clickable { showViewer = true }
-            } else {
-                Modifier
-            },
-        ) {
+        val bubbleSurfaceModifier = if (collapsed) {
+            Modifier.clickable { showViewer = true }
+        } else {
+            Modifier
+        }
+        val bubbleContent: @Composable BoxScope.() -> Unit = {
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                if (isInnerVoice) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    ) {
+                        Text(
+                            text = "💭 心声",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colors.accentLilac,
+                        )
+                    }
+                }
                 if (showPreview) {
                     val textModifier = Modifier
                         .heightIn(max = maxPreviewHeight)
                         .clipToBounds()
+                    val textStyle = if (isInnerVoice) {
+                        MaterialTheme.typography.bodyLarge.copy(fontStyle = FontStyle.Italic)
+                    } else {
+                        MaterialTheme.typography.bodyLarge
+                    }
                     if (collapsed) {
                         MentionAwareText(
                             text = body,
                             targets = mentionTargets,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = textStyle,
                             color = contentColor,
                             overflow = TextOverflow.Ellipsis,
                             modifier = textModifier,
                             onTextLayout = { overflows = it.didOverflowHeight },
+                            showInnerVoice = showInnerVoice && !isInnerVoice,
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
@@ -3277,11 +3421,12 @@ fun TextBubble(
                             MentionAwareText(
                                 text = body,
                                 targets = mentionTargets,
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = textStyle,
                                 color = contentColor,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = textModifier,
                                 onTextLayout = { overflows = it.didOverflowHeight },
+                                showInnerVoice = showInnerVoice && !isInnerVoice,
                             )
                         }
                     }
@@ -3318,6 +3463,21 @@ fun TextBubble(
                 }
             }
         }
+        if (isInnerVoice) {
+            InnerVoiceBubbleSurface(
+                isMine = isMine,
+                shape = bubbleShape(isMine),
+                modifier = bubbleSurfaceModifier,
+                content = bubbleContent,
+            )
+        } else {
+            TokiBubbleSurface(
+                isMine = isMine,
+                shape = bubbleShape(isMine),
+                modifier = bubbleSurfaceModifier,
+                content = bubbleContent,
+            )
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
@@ -3341,6 +3501,7 @@ fun TextBubble(
             text = body,
             mentionTargets = mentionTargets,
             onDismiss = { showViewer = false },
+            showInnerVoice = showInnerVoice && !isInnerVoice,
         )
     }
 }
@@ -3380,6 +3541,7 @@ private fun TextViewerDialog(
     text: String,
     mentionTargets: List<MentionTarget>,
     onDismiss: () -> Unit,
+    showInnerVoice: Boolean = false,
 ) {
     val colors = tokiColors
     Dialog(
@@ -3435,6 +3597,7 @@ private fun TextViewerDialog(
                             .fillMaxWidth()
                             .verticalScroll(rememberScrollState())
                             .padding(16.dp),
+                        showInnerVoice = showInnerVoice,
                     )
                 }
             }
@@ -3450,11 +3613,20 @@ fun ImageBubble(
     onAvatarClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     onCancel: (() -> Unit)? = null,
+    showInnerVoice: Boolean = false,
 ) {
     val imageBytes = message.pic
     val imagePath = message.filePath
     val hasImage = imageBytes != null || !imagePath.isNullOrBlank()
-    val caption = concealHiddenSpans(message.content)
+    val caption = if (showInnerVoice) {
+        if (isEntirelyHiddenSpan(message.content)) {
+            "💭 " + unwrapInnerVoice(message.content)
+        } else {
+            formatInnerVoiceText(message.content)
+        }
+    } else {
+        concealHiddenSpans(message.content)
+    }
     val colors = tokiColors
     var showFull by remember { mutableStateOf(false) }
     val fileSaverLauncher = rememberFileSaverLauncher { }

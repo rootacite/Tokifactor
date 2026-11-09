@@ -109,4 +109,19 @@ class SettingsStoreTest {
         assertFalse(store.updateSoloBackground("aki", bytes))
         assertFalse(store.soloBackgrounds.containsKey("aki"))
     }
+
+    @Test
+    fun showInnerVoiceDefaultsToFalseAndPersists() {
+        System.setProperty("user.home", tempHome.absolutePath)
+        val store = SettingsStore()
+        assertFalse(store.showInnerVoice)
+        store.updateShowInnerVoice(true)
+        assertTrue(store.showInnerVoice)
+
+        val reloaded = SettingsStore()
+        assertTrue(reloaded.showInnerVoice)
+        reloaded.updateShowInnerVoice(false)
+        val turnedOff = SettingsStore()
+        assertFalse(turnedOff.showInnerVoice)
+    }
 }

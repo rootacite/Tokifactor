@@ -300,6 +300,34 @@ fun SettingPage(
             },
         )
 
+        TokiSection(
+            title = "Display",
+            hint = "Customized rendering of conversation messages.",
+        ) {
+            TokiChoiceRow(
+                selected = viewModel.showInnerVoice,
+                onClick = { viewModel.showInnerVoice = !viewModel.showInnerVoice },
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "显示心声",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.text,
+                    )
+                    Text(
+                        text = "开启后，被 ~[...] 隐藏的消息与文本段将以专属心声特效呈现",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.textDim,
+                    )
+                }
+                Switch(
+                    checked = viewModel.showInnerVoice,
+                    onCheckedChange = { viewModel.showInnerVoice = it },
+                )
+            }
+        }
+
         TokiSection(title = "Security", hint = "Both devices must use exactly the same magic string.") {
             OutlinedTextField(
                 value = viewModel.magicString,

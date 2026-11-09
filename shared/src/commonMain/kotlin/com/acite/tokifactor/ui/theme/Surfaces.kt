@@ -83,6 +83,31 @@ fun TokiBubbleSurface(
 }
 
 @Composable
+fun InnerVoiceBubbleSurface(
+    isMine: Boolean,
+    modifier: Modifier = Modifier,
+    shape: Shape = tokiTokens.bubble,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val colors = tokiColors
+    val background = Brush.linearGradient(
+        listOf(
+            colors.accentLilac.copy(alpha = if (isMine) 0.32f else 0.22f),
+            colors.accentPink.copy(alpha = if (isMine) 0.22f else 0.14f),
+            colors.accentBlue.copy(alpha = if (isMine) 0.16f else 0.10f),
+        ),
+    )
+    val border = colors.accentLilac.copy(alpha = if (isMine) 0.65f else 0.45f)
+    Box(
+        modifier
+            .clip(shape)
+            .background(background)
+            .border(1.dp, border, shape),
+        content = content,
+    )
+}
+
+@Composable
 fun TokiSection(
     title: String,
     modifier: Modifier = Modifier,

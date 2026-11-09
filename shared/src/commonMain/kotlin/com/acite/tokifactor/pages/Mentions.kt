@@ -3,6 +3,7 @@ package com.acite.tokifactor.pages
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -11,10 +12,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
@@ -22,6 +25,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isSpecified
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
@@ -30,6 +35,11 @@ import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.platform.LocalDensity
+import com.hrm.latex.renderer.measure.rememberLatexMeasurer
+import com.hrm.latex.renderer.model.LatexConfig
+import com.hrm.latex.renderer.model.LatexTheme
+import com.acite.tokifactor.hasHiddenSpans
+import com.acite.tokifactor.parseInnerVoiceSegments
 import com.acite.tokifactor.model.AgentStatus
 import com.acite.tokifactor.model.ChatMessage
 import com.acite.tokifactor.model.SoloCharacter
@@ -267,6 +277,11 @@ internal fun autoCompleteMention(
     return TextFieldValue(completion.text, selection = TextRange(completion.cursor))
 }
 
+private sealed class InlineToken(val start: Int, val end: Int) {
+    class Mention(val span: MentionSpan) : InlineToken(span.start, span.end)
+    class Math(val span: MathSpan) : InlineToken(span.start, span.end)
+}
+
 @Composable
 internal fun MentionAwareText(
     text: String,
@@ -277,9 +292,56 @@ internal fun MentionAwareText(
     maxLines: Int = Int.MAX_VALUE,
     overflow: TextOverflow = TextOverflow.Clip,
     onTextLayout: ((TextLayoutResult) -> Unit)? = null,
+    showInnerVoice: Boolean = false,
 ) {
+    val colors = tokiColors
+    val contentColor = if (color != Color.Unspecified) color else colors.text
+    val mathFontSize = if (style.fontSize.isSpecified) style.fontSize else 17.sp
+
+    if (onTextLayout == null) {
+        if (isStandaloneMath(text)) {
+            MathBlock(
+                latex = text,
+                modifier = modifier,
+                color = contentColor,
+                fontSize = mathFontSize,
+            )
+            return
+        }
+        val blockSegments = remember(text) { splitBlockMathSegments(text) }
+        if (blockSegments.size > 1 || blockSegments.firstOrNull() is BlockMathSegment.Math) {
+            Column(modifier = modifier) {
+                blockSegments.forEach { segment ->
+                    when (segment) {
+                        is BlockMathSegment.Text -> {
+                            MentionAwareText(
+                                text = segment.text,
+                                targets = targets,
+                                style = style,
+                                color = color,
+                                maxLines = maxLines,
+                                overflow = overflow,
+                                showInnerVoice = showInnerVoice,
+                            )
+                        }
+                        is BlockMathSegment.Math -> {
+                            MathBlock(
+                                latex = segment.formula,
+                                color = contentColor,
+                                fontSize = mathFontSize,
+                            )
+                        }
+                    }
+                }
+            }
+            return
+        }
+    }
+
+    val hasInner = showInnerVoice && hasHiddenSpans(text)
     val spans = remember(text, targets) { findMentionSpans(text, targets) }
-    if (spans.isEmpty()) {
+    val mathSpans = remember(text) { findMathSpans(text) }
+    if (!hasInner && spans.isEmpty() && mathSpans.isEmpty()) {
         if (onTextLayout == null) {
             Text(
                 text = text,
@@ -303,44 +365,115 @@ internal fun MentionAwareText(
         return
     }
 
-    val colors = tokiColors
     val labelStyle = style.copy(fontWeight = FontWeight.SemiBold)
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val horizontalPaddingPx = with(density) { 10.dp.roundToPx() }
     val verticalPaddingPx = with(density) { 2.dp.roundToPx() }
+
+    val latexTheme = remember(contentColor) {
+        LatexTheme.dark(color = contentColor, backgroundColor = Color.Transparent)
+    }
+    val latexConfig = remember(mathFontSize, latexTheme) {
+        LatexConfig(fontSize = mathFontSize, theme = latexTheme)
+    }
+    val latexMeasurer = rememberLatexMeasurer(latexConfig)
+
     val inlineContent = mutableMapOf<String, InlineTextContent>()
     val builder = AnnotatedString.Builder()
-    var cursor = 0
-    spans.forEach { span ->
-        val label = span.label
-        val mentionColor = span.target.color(colors)
-        val id = "mention:${canonicalMemberName(label)}"
-        builder.append(text.substring(cursor, span.start))
-        if (id !in inlineContent) {
-            val measured = measurer.measure(
-                text = AnnotatedString(label),
-                style = labelStyle,
-                maxLines = 1,
-            )
-            inlineContent[id] = InlineTextContent(
-                Placeholder(
-                    width = with(density) {
-                        (measured.size.width + horizontalPaddingPx).toSp()
-                    },
-                    height = with(density) {
-                        (measured.size.height + verticalPaddingPx).toSp()
-                    },
-                    placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
-                ),
-            ) {
-                MentionLabel(label = label, color = mentionColor, style = labelStyle)
+
+    fun appendSegmentWithTokens(segText: String) {
+        val segMentions = findMentionSpans(segText, targets).map { InlineToken.Mention(it) }
+        val segMath = findMathSpans(segText).filter { !it.isBlock }.map { InlineToken.Math(it) }
+        val allTokens = (segMentions + segMath).sortedBy { it.start }
+
+        val tokens = mutableListOf<InlineToken>()
+        var lastEnd = 0
+        for (token in allTokens) {
+            if (token.start >= lastEnd) {
+                tokens += token
+                lastEnd = token.end
             }
         }
-        builder.appendInlineContent(id, label)
-        cursor = span.end
+
+        var cursor = 0
+        for (token in tokens) {
+            builder.append(segText.substring(cursor, token.start))
+            when (token) {
+                is InlineToken.Mention -> {
+                    val span = token.span
+                    val label = span.label
+                    val mentionColor = span.target.color(colors)
+                    val id = "mention:${canonicalMemberName(label)}"
+                    if (id !in inlineContent) {
+                        val measured = measurer.measure(
+                            text = AnnotatedString(label),
+                            style = labelStyle,
+                            maxLines = 1,
+                        )
+                        inlineContent[id] = InlineTextContent(
+                            Placeholder(
+                                width = with(density) {
+                                    (measured.size.width + horizontalPaddingPx).toSp()
+                                },
+                                height = with(density) {
+                                    (measured.size.height + verticalPaddingPx).toSp()
+                                },
+                                placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
+                            ),
+                        ) {
+                            MentionLabel(label = label, color = mentionColor, style = labelStyle)
+                        }
+                    }
+                    builder.appendInlineContent(id, label)
+                }
+                is InlineToken.Math -> {
+                    val span = token.span
+                    val id = "math_${span.start}_${span.end}_${span.formula.hashCode()}"
+                    if (id !in inlineContent) {
+                        val item = runCatching {
+                            latexMeasurer.inlineContent(span.formula, latexConfig)
+                        }.getOrNull()
+                        if (item != null) {
+                            inlineContent[id] = item
+                            builder.appendInlineContent(id, span.raw)
+                        } else {
+                            builder.append(span.raw)
+                        }
+                    } else {
+                        builder.appendInlineContent(id, span.raw)
+                    }
+                }
+            }
+            cursor = token.end
+        }
+        builder.append(segText.substring(cursor))
     }
-    builder.append(text.substring(cursor))
+
+    if (hasInner) {
+        val segments = parseInnerVoiceSegments(text)
+        segments.forEach { segment ->
+            if (segment.isInnerVoice) {
+                builder.pushStyle(
+                    SpanStyle(
+                        color = colors.accentLilac,
+                        background = colors.accentLilac.copy(alpha = 0.18f),
+                        fontStyle = FontStyle.Italic,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                )
+                builder.append(" 💭 ")
+                appendSegmentWithTokens(segment.text)
+                builder.append(" ")
+                builder.pop()
+            } else {
+                appendSegmentWithTokens(segment.text)
+            }
+        }
+    } else {
+        appendSegmentWithTokens(text)
+    }
+
     val annotated = builder.toAnnotatedString()
     if (onTextLayout == null) {
         Text(

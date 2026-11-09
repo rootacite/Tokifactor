@@ -148,6 +148,10 @@ private data class ListMarker(val indent: Int)
 private fun openingFence(line: String): Fence? {
     val trimmed = line.trimStart()
     val character = trimmed.firstOrNull() ?: return null
+    if (character == '$' && trimmed.startsWith("$$")) {
+        val length = trimmed.takeWhile { it == '$' }.length
+        return if (length >= 2) Fence('$', length) else null
+    }
     if (character != '`' && character != '~') return null
     val length = trimmed.takeWhile { it == character }.length
     return if (length >= 3) Fence(character, length) else null

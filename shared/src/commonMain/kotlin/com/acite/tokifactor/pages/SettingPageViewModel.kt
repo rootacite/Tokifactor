@@ -83,6 +83,8 @@ class SettingPageViewModel(
 
     var soloBackgrounds by mutableStateOf(settingsStore.soloBackgrounds.toMap())
 
+    var showInnerVoice by mutableStateOf(settingsStore.showInnerVoice)
+
     var soloBackgroundError by mutableStateOf<String?>(null)
         private set
 
@@ -126,6 +128,7 @@ class SettingPageViewModel(
         customPassword = settingsStore.mqttCustomPassword
         avatarBytes = settingsStore.avatarBytes
         soloBackgrounds = settingsStore.soloBackgrounds.toMap()
+        showInnerVoice = settingsStore.showInnerVoice
         soloBackgroundError = null
         avatarError = null
         nameResolution = null
@@ -303,6 +306,7 @@ class SettingPageViewModel(
         settingsStore.updateFontScale(fontScale)
         settingsStore.updateAppearanceId(appearanceId)
         settingsStore.updateAvatar(avatarBytes)
+        settingsStore.updateShowInnerVoice(showInnerVoice)
         for (character in SoloCharacter.entries) {
             if (!settingsStore.updateSoloBackground(
                     character.key,

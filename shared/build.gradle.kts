@@ -55,6 +55,8 @@ kotlin {
 
             implementation(libs.material.icons.extended)
             implementation(libs.markdown.renderer.m3)
+            implementation(libs.latex.renderer)
+            implementation(libs.latex.fonts.katex)
             implementation(libs.okio)
             implementation(libs.kotlinx.serialization.json)
 
